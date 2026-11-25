@@ -243,17 +243,33 @@
       loader.classList.remove('hidden');
       if (msg) { loader.innerHTML = `<div class="box"><div class="dim">${esc(msg)}</div></div>`; return; }
       const local = version.fileName;
+      const saved = S.savedHandle;
       loader.innerHTML = `<div class="box">
         <h2>載入 ${esc(version.label)} 的影片</h2>
         ${errMsg ? `<p class="err">${esc(errMsg)}</p>` : ''}
-        ${local ? `<p class="muted" style="margin:8px 0 0">此版本的本機檔案：<b>${esc(version.fileName)}</b>${version.fileSize ? `（${(version.fileSize / 1048576).toFixed(1)} MB）` : ''}</p>` : ''}
-        <div class="drop" id="drop">拖曳影片到這裡，或<br><button class="btn primary" id="pickFile" style="margin-top:10px">選擇本機檔案</button>
+        ${saved ? `<div class="restore"><button class="btn primary" id="restoreFile">▶ 載入上次的檔案</button>
+            <div class="mono restore-name">${esc(saved.name)}</div>
+            <p class="dim">瀏覽器會詢問是否允許網站讀取這個檔案。若出現「每次造訪都允許」請選它，之後打開就會自動載入。</p></div>`
+          : local ? `<p class="muted" style="margin:8px 0 0">此版本的本機檔案：<b>${esc(version.fileName)}</b>${version.fileSize ? `（${(version.fileSize / 1048576).toFixed(1)} MB）` : ''}</p>` : ''}
+        <div class="drop" id="drop">${saved ? '或換一個檔案：拖曳到這裡，或' : '拖曳影片到這裡，或'}<br><button class="btn ${saved ? '' : 'primary'}" id="pickFile" style="margin-top:10px">選擇本機檔案</button>
           <input type="file" id="pickInput" accept="video/mp4,video/quicktime,video/*" hidden></div>
+        ${RT.fileStore.canRemember ? '' : '<p class="dim" style="font-size:12px;margin:8px 0 0">提示：用 Chrome 或 Edge 開啟，網站可以記住本機檔案的位置，下次不用重新選檔。</p>'}
         <div class="row" style="margin-top:12px"><input type="url" id="srcUrl" class="grow" placeholder="或貼上雲端連結（Google Drive / Dropbox / mp4 網址）" value="${esc(version.url || '')}"><button class="btn" id="srcUrlBtn">載入</button></div>
         <p style="margin-top:14px"><button class="btn ghost sm" id="skipVideo">先不載入，只看註記 →</button></p>
       </div>`;
-      $('#pickFile').onclick = () => $('#pickInput').click();
+      $('#pickFile').onclick = async () => {
+        if (!RT.fileStore.canRemember) { $('#pickInput').click(); return; }
+        try { const r = await RT.fileStore.pickVideo(); if (r) loadFile(r.file, r.handle); }
+        catch (e) { $('#pickInput').click(); } // 不支援時改用一般選檔
+      };
       $('#pickInput').onchange = (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+      if (saved) $('#restoreFile').onclick = async () => {
+        try { await loadFile(await RT.fileStore.fileFrom(saved, true), saved); }
+        catch (e) {
+          if (e.code === 'MISSING') { RT.fileStore.del('video:' + vid); S.savedHandle = null; showLoader(null, e.message); }
+          else RT.toast(e.code === 'PERM' ? '沒有取得讀取權限，請再按一次並選「允許」' : e.message, 'bad');
+        }
+      };
       $('#srcUrlBtn').onclick = () => { const u = $('#srcUrl').value.trim(); if (u) loadUrl(u, true); };
       $('#srcUrl').onkeydown = (e) => { if (e.key === 'Enter') $('#srcUrlBtn').click(); };
       $('#skipVideo').onclick = () => {
@@ -263,14 +279,23 @@
       const drop = $('#drop');
       ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
       ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
-      drop.addEventListener('drop', (e) => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+      drop.addEventListener('drop', async (e) => {
+        const f = e.dataTransfer.files[0];
+        if (!f) return;
+        // Chrome / Edge 可以從拖曳取得檔案位置（必須在事件當下呼叫）
+        const item = e.dataTransfer.items && e.dataTransfer.items[0];
+        const hp = item && item.getAsFileSystemHandle ? item.getAsFileSystemHandle().catch(() => null) : null;
+        const handle = hp ? await hp : null;
+        loadFile(f, handle && handle.kind === 'file' ? handle : null);
+      });
     }
 
-    async function loadFile(file) {
+    async function loadFile(file, handle) {
       if (!/^video\//.test(file.type) && !/\.(mp4|mov|m4v)$/i.test(file.name)) { RT.toast('請選擇影片檔（mp4 / mov）', 'bad'); return; }
       RT.pendingFiles[vid] = file;
       await loadSource({ file }, file.name);
       if (!player.loaded()) return;
+      if (handle) { RT.fileStore.remember(vid, handle); S.savedHandle = handle; } // 記住位置，下次自動載入
       const warn = [];
       if (version.fileName && version.fileName !== file.name) warn.push(`檔名與版本記錄不同（記錄：${version.fileName}）`);
       else if (version.fileSize && Math.abs(version.fileSize - file.size) > 0) warn.push(`檔案大小與版本記錄不同，可能不是同一個輸出檔`);
@@ -1013,7 +1038,10 @@
       try {
         const text = RT.decodeText(await file.arrayBuffer());
         applySubText(text, file.name, true);
-        RT.pendingSubs[vid] = { name: file.name, text };
+        if (SUB.cues.length) {
+          RT.pendingSubs[vid] = { name: file.name, text };
+          RT.fileStore.set('subs:' + vid, { name: file.name, text }); // 只存在這台電腦，不會上傳
+        }
       } catch (e) { RT.fail(e); }
     }
     function applySubText(text, name, fresh) {
@@ -1041,6 +1069,7 @@
     function clearSubs() {
       SUB.cues = []; SUB.errors = []; SUB.name = ''; SUB.text = '';
       delete RT.pendingSubs[vid];
+      RT.fileStore.del('subs:' + vid);
       $('#srtName').textContent = '尚未載入（SRT / VTT，只在你的電腦上讀取，不會上傳）';
       $('#srtClear').classList.add('hidden');
       $('#srtSummary').innerHTML = '';
@@ -1353,10 +1382,24 @@
     updateFilterOptions();
     renderNotes();
     updateFrameUI();
-    if (RT.pendingSubs[vid]) applySubText(RT.pendingSubs[vid].text, RT.pendingSubs[vid].name, false);
-    if (RT.pendingFiles[vid]) loadFile(RT.pendingFiles[vid]);
-    else if (version.url) loadUrl(version.url, false);
-    else showLoader();
+    (async () => {
+      showLoader('讀取中…');
+      // 字幕：記憶體 → 這台電腦上次載入的
+      const subs = RT.pendingSubs[vid] || await RT.fileStore.get('subs:' + vid);
+      if (subs && subs.text && !SUB.cues.length) { RT.pendingSubs[vid] = subs; applySubText(subs.text, subs.name, false); }
+      // 影片：記憶體 → 記住的本機檔案 → 雲端連結 → 請使用者選擇
+      if (RT.pendingFiles[vid]) { loadFile(RT.pendingFiles[vid]); return; }
+      S.savedHandle = RT.fileStore.canRemember ? await RT.fileStore.get('video:' + vid) : null;
+      if (S.savedHandle) {
+        try { await loadFile(await RT.fileStore.fileFrom(S.savedHandle, false), S.savedHandle); return; }
+        catch (e) {
+          if (e.code === 'MISSING') { RT.fileStore.del('video:' + vid); S.savedHandle = null; showLoader(null, e.message); return; }
+          showLoader(); return; // 需要使用者按一下允許
+        }
+      }
+      if (version.url) loadUrl(version.url, false);
+      else showLoader();
+    })();
     if (S.sel) setTimeout(() => { const el = $(`[data-note="${CSS.escape(S.sel)}"]`); if (el) el.scrollIntoView({ block: 'center' }); }, 50);
   };
 })();
