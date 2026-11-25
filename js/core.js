@@ -14,9 +14,12 @@ var RTCore = (function () {
   var VENDOR_NOTE_STATUS = ['待修改', '修改中', '已修改'];
   var VERSION_STATUS = ['審閱中', '需修改', '已核准'];
   var PROJECT_STATUS = ['進行中', '待審閱', '已完成', '暫停'];
+  // 角色：admin 管理者、acer Acer 同事（內部審閱者）、vendor 廠商；guest 為分享連結訪客
+  var ROLES = ['admin', 'acer', 'vendor'];
+  var ROLE_LABEL = { admin: '管理者', acer: 'Acer同事', vendor: '廠商', guest: '訪客' };
 
   var SCHEMA = {
-    Users: ['id', 'username', 'displayName', 'role', 'pinHash', 'salt', 'email', 'company', 'active', 'notify', 'createdAt'],
+    Users: ['id', 'username', 'displayName', 'role', 'pinHash', 'salt', 'email', 'company', 'active', 'notify', 'createdAt', 'mustChangePin'],
     Projects: ['id', 'name', 'description', 'members', 'status', 'dueDate', 'watermark', 'createdAt', 'createdBy', 'updatedAt'],
     Versions: ['id', 'projectId', 'label', 'sourceType', 'fileName', 'fileSize', 'url', 'fps', 'dropFrame', 'startTC',
       'durationFrames', 'width', 'height', 'status', 'createdAt', 'createdBy', 'remark'],
@@ -148,7 +151,8 @@ var RTCore = (function () {
     function publicUser(u) {
       return {
         username: u.username, displayName: u.displayName || u.username, role: u.role, email: u.email,
-        company: u.company, active: bool(u.active), notify: bool(u.notify), createdAt: u.createdAt
+        company: u.company, active: bool(u.active), notify: bool(u.notify), createdAt: u.createdAt,
+        mustChangePin: bool(u.mustChangePin)
       };
     }
     function userName(username) {
@@ -196,7 +200,10 @@ var RTCore = (function () {
       return v;
     }
     function canComment(ctx) { return ctx.role !== 'guest' || bool(ctx.share.canComment); }
-    function seesInternal(ctx) { return ctx.role === 'admin'; }
+    // 內部人員（管理者、Acer 同事）：看得到、可建立內部註記，可設定所有註記狀態
+    function isStaff(ctx) { return ctx.role === 'admin' || ctx.role === 'acer'; }
+    function seesInternal(ctx) { return isStaff(ctx); }
+    function isStaffUser(username) { var r = (get('Users', str(username).toLowerCase()) || {}).role; return r === 'admin' || r === 'acer'; }
 
     function peopleForProject(p) {
       var members = csv(p.members).map(function (s) { return s.toLowerCase(); });
@@ -323,9 +330,10 @@ var RTCore = (function () {
       var u = ctx.user;
       if (hashPin(str(req.oldPin), u.salt) !== u.pinHash) throw err('目前的 PIN 不正確');
       validatePin(req.newPin);
+      if (str(req.newPin) === str(req.oldPin)) throw err('新的 PIN 不能和目前的一樣');
       var salt = env.uuid().slice(0, 16);
-      update('Users', u.id, { pinHash: hashPin(str(req.newPin), salt), salt: salt });
-      return {};
+      update('Users', u.id, { pinHash: hashPin(str(req.newPin), salt), salt: salt, mustChangePin: '' });
+      return { user: publicUser(get('Users', u.id)) };
     };
 
     function validatePin(pin) {
@@ -344,7 +352,7 @@ var RTCore = (function () {
       var un = str(d.username).trim();
       if (!/^[A-Za-z0-9_.-]{2,32}$/.test(un)) throw err('帳號需為 2–32 個英數字（可含 _ . -）');
       var key = un.toLowerCase();
-      var role = d.role === 'admin' ? 'admin' : 'vendor';
+      var role = ROLES.indexOf(d.role) >= 0 ? d.role : 'vendor';
       var existing = get('Users', key);
       var patch = {
         username: existing ? existing.username : un, displayName: str(d.displayName).trim() || un, role: role,
@@ -353,11 +361,17 @@ var RTCore = (function () {
       };
       if (existing) {
         if (existing.id === ctx.user.id && (role !== 'admin' || !patch.active)) throw err('不能停用自己或移除自己的管理者權限');
-        if (d.pin) { validatePin(d.pin); patch.salt = env.uuid().slice(0, 16); patch.pinHash = hashPin(str(d.pin), patch.salt); }
+        if (d.pin) {
+          validatePin(d.pin);
+          patch.salt = env.uuid().slice(0, 16); patch.pinHash = hashPin(str(d.pin), patch.salt);
+          // 管理者幫別人重設 PIN → 對方下次登入要先改成自己的 PIN
+          if (existing.id !== ctx.user.id) patch.mustChangePin = 'TRUE';
+        }
         update('Users', key, patch);
       } else {
         validatePin(d.pin);
         patch.id = key; patch.salt = env.uuid().slice(0, 16); patch.pinHash = hashPin(str(d.pin), patch.salt); patch.createdAt = now();
+        patch.mustChangePin = 'TRUE'; // 新帳號用管理者給的預設 PIN，第一次登入必須先改
         insert('Users', patch);
       }
       return { user: publicUser(get('Users', key)) };
@@ -579,7 +593,7 @@ var RTCore = (function () {
           if (d.dueDate !== undefined) patch.dueDate = str(d.dueDate);
         }
         if (d.internal !== undefined) {
-          if (ctx.role !== 'admin') throw err('只有管理者可以設定內部註記', 'PERM');
+          if (!isStaff(ctx)) throw err('只有管理者或 Acer 同事可以設定內部註記', 'PERM');
           patch.internal = d.internal ? 'TRUE' : '';
         }
         if (d.status !== undefined && d.status !== n.status) {
@@ -606,7 +620,7 @@ var RTCore = (function () {
         var text = str(d.text).trim();
         if (!text && !d.drawing) throw err('請輸入註記內容或畫記');
         if (d.status && d.status !== '待修改') checkStatus(ctx, d.status);
-        var internal = d.internal && ctx.role === 'admin';
+        var internal = d.internal && isStaff(ctx);
         var inF = Math.max(0, Math.round(num(d.inFrame)));
         var outF = Math.max(inF, Math.round(num(d.outFrame, inF)));
         var row = {
@@ -625,7 +639,7 @@ var RTCore = (function () {
         var body = ctx.displayName + ' 在 ' + p.name + ' ' + v.label + ' @ ' + tc + ' 留下註記：\n\n' + text + '\n\n' + link(v);
         if (!internal) notify(csv(p.members).concat(admins()), '[Retake] ' + p.name + ' ' + v.label + ' 新註記 ' + tc, body, ctx.username);
         notify(csv(n.mentions).concat(n.assignee ? [n.assignee] : []).filter(function (u) {
-          return !internal || (get('Users', u) || {}).role === 'admin';
+          return !internal || isStaffUser(u);
         }), '[Retake] 有人在註記中提到你：' + p.name + ' ' + tc, body, ctx.username);
       }
       var o = noteOut(n);
@@ -637,7 +651,7 @@ var RTCore = (function () {
     function checkStatus(ctx, st) {
       if (NOTE_STATUS.indexOf(st) < 0) throw err('狀態不正確');
       if (ctx.role === 'guest') throw err('訪客無法變更狀態', 'PERM');
-      if (ctx.role !== 'admin' && VENDOR_NOTE_STATUS.indexOf(st) < 0) throw err('「' + st + '」只有管理者可以設定', 'PERM');
+      if (!isStaff(ctx) && VENDOR_NOTE_STATUS.indexOf(st) < 0) throw err('「' + st + '」只有管理者或 Acer 同事可以設定', 'PERM');
     }
     function validMentions(list, p) {
       var people = peopleForProject(p).map(function (x) { return x.username.toLowerCase(); });
@@ -674,7 +688,7 @@ var RTCore = (function () {
       }
       var attach = saveAttachments(ctx, n.projectId, req.attachData);
       if (!text && !change && !attach.length) throw err('請輸入回覆內容');
-      var internal = req.internal && ctx.role === 'admin';
+      var internal = req.internal && isStaff(ctx);
       var r = insert('Replies', {
         id: id('r'), noteId: n.id, projectId: n.projectId, author: ctx.username, text: text, attachIds: attach.join(','),
         statusChange: change, internal: internal ? 'TRUE' : '', createdAt: now()
@@ -683,7 +697,7 @@ var RTCore = (function () {
       touchProject(p.id);
       var tc = noteLabel(n, v);
       var to = [n.author, n.assignee].concat(admins()).concat(validMentions(parseMentions(text), p));
-      if (internal) to = to.filter(function (u) { return (get('Users', str(u).toLowerCase()) || {}).role === 'admin'; });
+      if (internal) to = to.filter(isStaffUser);
       notify(to, '[Retake] ' + p.name + ' ' + v.label + ' ' + tc + ' 新回覆' + (change ? '（' + req.status + '）' : ''),
         ctx.displayName + '：' + text + (change ? '\n狀態：' + change : '') + '\n\n原註記：' + n.text + '\n' + link(v), ctx.username);
       var o = noteOut(get('Notes', n.id));
@@ -783,6 +797,7 @@ var RTCore = (function () {
 
     /* ---------- 入口 ---------- */
     var PUBLIC = { ping: 1, login: 1, shareInfo: 1, shareLogin: 1, logout: 1 };
+    var ALLOWED_BEFORE_PIN_CHANGE = { me: 1, changePin: 1 };
 
     function handle(req) {
       req = req || {};
@@ -790,7 +805,11 @@ var RTCore = (function () {
       if (!fn) throw err('未知的動作：' + req.action);
       var run = function () {
         if (PUBLIC[req.action]) return fn(req, null);
-        return fn(req, auth(req.token));
+        var ctx = auth(req.token);
+        if (ctx.user && bool(ctx.user.mustChangePin) && !ALLOWED_BEFORE_PIN_CHANGE[req.action]) {
+          throw err('請先變更 PIN 才能繼續使用', 'PINCHANGE');
+        }
+        return fn(req, ctx);
       };
       if (WRITE_ACTIONS[req.action] && env.withLock) return env.withLock(run);
       return run();
@@ -801,7 +820,7 @@ var RTCore = (function () {
       var salt = env.uuid().slice(0, 16);
       insert('Users', {
         id: username.toLowerCase(), username: username, displayName: displayName || username, role: 'admin',
-        pinHash: hashPin(pin, salt), salt: salt, active: 'TRUE', notify: '', createdAt: now()
+        pinHash: hashPin(pin, salt), salt: salt, active: 'TRUE', notify: '', createdAt: now(), mustChangePin: 'TRUE'
       });
       return true;
     }
@@ -811,6 +830,7 @@ var RTCore = (function () {
 
   return {
     create: create, SCHEMA: SCHEMA, TC: TC, NOTE_STATUS: NOTE_STATUS, NOTE_DONE: NOTE_DONE,
-    VENDOR_NOTE_STATUS: VENDOR_NOTE_STATUS, VERSION_STATUS: VERSION_STATUS, PROJECT_STATUS: PROJECT_STATUS
+    VENDOR_NOTE_STATUS: VENDOR_NOTE_STATUS, VERSION_STATUS: VERSION_STATUS, PROJECT_STATUS: PROJECT_STATUS,
+    ROLES: ROLES, ROLE_LABEL: ROLE_LABEL
   };
 })();

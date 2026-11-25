@@ -7,7 +7,7 @@
 
   /* ================= 版本 ================= */
   // 每次發佈新功能時更新這裡（同時記得更新 index.html 的 ?v=）
-  RT.VERSION = '1.1.0';
+  RT.VERSION = '1.2.0';
 
   /* 標題列品牌：Acer logo ｜ 系統名稱 ＋ 版本 */
   RT.brandHTML = function (href) {
@@ -33,7 +33,12 @@
     $('#toasts').appendChild(t);
     setTimeout(() => t.remove(), kind === 'bad' ? 5000 : 2600);
   };
-  RT.fail = (e) => { console.error(e); RT.toast(e.message || String(e), 'bad'); if (e.code === 'AUTH') RT.logout(true); };
+  RT.fail = (e) => {
+    console.error(e);
+    if (e.code === 'PINCHANGE') { RT.updateUser({ mustChangePin: true }); RT.route(); return; }
+    RT.toast(e.message || String(e), 'bad');
+    if (e.code === 'AUTH') RT.logout(true);
+  };
 
   /* 對話框：onOk(el) 回傳 false 不關閉；丟出錯誤會顯示在框內 */
   RT.modal = function (o) {
@@ -140,6 +145,11 @@
   RT.user = () => RT.session && RT.session.user;
   RT.isAdmin = () => RT.user() && RT.user().role === 'admin';
   RT.isGuest = () => RT.user() && RT.user().role === 'guest';
+  // 內部人員（管理者＋Acer 同事）：看得到內部註記、可設定所有註記狀態
+  RT.isStaff = () => RT.user() && (RT.user().role === 'admin' || RT.user().role === 'acer');
+  RT.roleLabel = (role) => (RTCore.ROLE_LABEL && RTCore.ROLE_LABEL[role]) || role;
+  RT.needsPinChange = () => !!(RT.user() && RT.user().role !== 'guest' && RT.user().mustChangePin);
+  RT.updateUser = (user) => { if (RT.session && user) { RT.session.user = Object.assign({}, RT.session.user, user); RT.saveSession(RT.session); } };
   RT.logout = function (expired) {
     const s = RT.session;
     if (s && s.token && !expired) RT.call('logout', { token: s.token }).catch(() => {});
@@ -172,7 +182,7 @@
       const old = $('.usermenu .menu');
       if (old) { old.remove(); return; }
       const menu = RT.el(`<div class="menu">
-        <div class="dim" style="padding:6px 10px;font-size:12px">${esc(u.username)}・${u.role === 'admin' ? '管理者' : u.role === 'guest' ? '訪客' : '廠商'}</div>
+        <div class="dim" style="padding:6px 10px;font-size:12px">${esc(u.username)}・${esc(RT.roleLabel(u.role))}</div>
         ${RT.isGuest() ? '' : '<button data-a="pin">變更 PIN</button>'}
         ${RT.isDemo && RT.isAdmin() ? '<button data-a="reset">清除試用資料</button>' : ''}
         <button data-a="logout">登出</button>
@@ -200,10 +210,45 @@
       onOk: async (m) => {
         const o = $('[name=old]', m).value, n1 = $('[name=n1]', m).value, n2 = $('[name=n2]', m).value;
         if (n1 !== n2) throw new Error('兩次輸入的 PIN 不一樣');
-        await RT.call('changePin', { oldPin: o, newPin: n1 });
+        const res = await RT.call('changePin', { oldPin: o, newPin: n1 });
+        RT.updateUser(res.user);
         RT.toast('PIN 已變更', 'ok');
       }
     });
+  }
+
+  /* 第一次登入（或 PIN 被管理者重設）：先改成自己的 PIN 才能使用 */
+  function pageForcePin() {
+    const u = RT.user();
+    $('#app').innerHTML = `<div class="login-wrap"><form class="login card" autocomplete="off">
+      ${RT.brandHTML()}
+      <h2 style="margin:0 0 6px;font-size:17px">請設定你自己的 PIN</h2>
+      <p class="muted" style="margin:0 0 14px;font-size:13px">${esc(u.displayName)}，這是你第一次登入（或管理者剛重設了你的 PIN）。<br>請把管理者給你的預設 PIN 換成只有你知道的 PIN，換好才能開始使用。</p>
+      <label class="field"><span>預設 PIN（管理者給你的）</span><input type="password" name="old" inputmode="numeric" autocomplete="current-password" required></label>
+      <label class="field"><span>新的 PIN（4–12 位數字）</span><input type="password" name="n1" inputmode="numeric" autocomplete="new-password" required></label>
+      <label class="field"><span>再輸入一次新的 PIN</span><input type="password" name="n2" inputmode="numeric" autocomplete="new-password" required></label>
+      <div class="err" id="pinErr"></div>
+      <button class="btn primary" type="submit">設定並開始使用</button>
+      <p class="dim" style="font-size:12px;margin:12px 0 0">不是你的帳號？<a href="#" id="forceLogout">登出</a></p>
+    </form></div>`;
+    const f = $('.login');
+    f.old.focus();
+    $('#forceLogout').onclick = (e) => { e.preventDefault(); RT.logout(); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      $('#pinErr').textContent = '';
+      try {
+        if (!/^\d{4,12}$/.test(f.n1.value)) throw new Error('新的 PIN 需為 4–12 位數字');
+        if (f.n1.value !== f.n2.value) throw new Error('兩次輸入的新 PIN 不一樣');
+        const res = await RT.busy($('button[type=submit]', f), () => RT.call('changePin', { oldPin: f.old.value, newPin: f.n1.value }));
+        RT.updateUser(Object.assign({ mustChangePin: false }, res.user));
+        RT.toast('PIN 已設定，之後請用新的 PIN 登入', 'ok');
+        route();
+      } catch (err) {
+        if (err.code === 'AUTH') { RT.logout(true); return; }
+        $('#pinErr').textContent = err.message;
+      }
+    };
   }
 
   /* ================= 路由 ================= */
@@ -232,6 +277,7 @@
       if (page === 'p' && parts[1] === RT.session.share.projectId) return pageProject(parts[1]);
       return guestHome();
     }
+    if (RT.needsPinChange()) return pageForcePin();
     try {
       if (page === 'p' && parts[1]) return await pageProject(parts[1]);
       if (page === 'r' && parts[1]) return await RT.pageReview(parts[1], q);
@@ -251,7 +297,7 @@
       <label class="field"><span>PIN 碼</span><input type="password" name="pin" inputmode="numeric" autocomplete="current-password" required></label>
       <div class="err" id="loginErr"></div>
       <button class="btn primary" type="submit">登入</button>
-      ${RT.isDemo ? `<div class="demo-tip"><b>試用模式</b>：資料只存在這台電腦的瀏覽器。<br>管理者 <span class="mono">admin / 1234</span>　廠商 <span class="mono">studio_a / 5678</span><br>正式使用請依 README 設定 Google Apps Script。</div>` : ''}
+      ${RT.isDemo ? `<div class="demo-tip"><b>試用模式</b>：資料只存在這台電腦的瀏覽器。<br>管理者 <span class="mono">admin / 1234</span>　廠商 <span class="mono">studio_a / 5678</span><br>Acer同事 <span class="mono">acer_amy / 2468</span><br>正式使用請依 README 設定 Google Apps Script。</div>` : ''}
     </form></div>`;
     const f = $('.login');
     f.username.focus();
@@ -355,7 +401,8 @@
 
   /* ================= 專案設定 ================= */
   async function projectModal(p) {
-    const users = (await RT.call('listUsers')).users.filter((u) => u.role === 'vendor' && u.active);
+    const users = (await RT.call('listUsers')).users.filter((u) => u.role !== 'admin' && u.active)
+      .sort((a, b) => (a.role === b.role ? 0 : a.role === 'acer' ? -1 : 1));
     const members = p ? p.members.map((s) => s.toLowerCase()) : [];
     RT.modal({
       title: p ? '編輯專案' : '新增專案', wide: true,
@@ -365,8 +412,8 @@
           <label class="field"><span>狀態</span><select name="status">${RTCore.PROJECT_STATUS.map((s) => `<option ${p && p.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
           <label class="field"><span>截止日</span><input type="date" name="dueDate" value="${esc(p ? p.dueDate : '')}"></label>
         </div>
-        <div class="field"><span>參與的廠商帳號（只有勾選的廠商看得到此專案）</span>
-          <div class="row wrap" style="gap:6px 16px">${users.length ? users.map((u) => `<label class="chk"><input type="checkbox" name="m" value="${esc(u.username.toLowerCase())}" ${members.includes(u.username.toLowerCase()) ? 'checked' : ''}>${esc(u.displayName)} <span class="dim">${esc(u.company || u.username)}</span></label>`).join('') : '<span class="dim">尚未建立廠商帳號，請到「帳號管理」新增。</span>'}</div></div>
+        <div class="field"><span>參與的成員（Acer 同事與廠商；只有勾選的人看得到此專案，管理者一律看得到）</span>
+          <div class="row wrap" style="gap:6px 16px">${users.length ? users.map((u) => `<label class="chk"><input type="checkbox" name="m" value="${esc(u.username.toLowerCase())}" ${members.includes(u.username.toLowerCase()) ? 'checked' : ''}>${esc(u.displayName)} <span class="dim">${u.role === 'acer' ? 'Acer同事' : esc(u.company || u.username)}</span></label>`).join('') : '<span class="dim">尚未建立 Acer 同事或廠商帳號，請到「帳號管理」新增。</span>'}</div></div>
         <label class="chk"><input type="checkbox" name="watermark" ${p && p.watermark ? 'checked' : ''}> 廠商與訪客觀看時顯示浮水印（姓名＋日期）</label>`,
       okText: p ? '儲存' : '建立',
       onOk: async (m) => {
@@ -415,7 +462,7 @@
         <div class="tile"><div class="k">逾期</div><div class="v ${data.stats.overdue ? 'bad' : ''}" style="font-size:22px">${data.stats.overdue}</div></div>
       </div>
       <div style="margin-top:12px">${RT.progressBar(data.stats)}</div>
-      ${RT.isGuest() ? '' : `<div class="chips" style="margin-top:12px"><span class="dim" style="font-size:12.5px">成員：</span>${data.people.map((x) => `<span class="chip">${esc(x.displayName)}${x.role === 'admin' ? ' · 管理者' : x.company ? ' · ' + esc(x.company) : ''}</span>`).join('')}</div>`}
+      ${RT.isGuest() ? '' : `<div class="chips" style="margin-top:12px"><span class="dim" style="font-size:12.5px">成員：</span>${data.people.map((x) => `<span class="chip">${esc(x.displayName)}${x.role === 'admin' || x.role === 'acer' ? ' · ' + RT.roleLabel(x.role) : x.company ? ' · ' + esc(x.company) : ''}</span>`).join('')}</div>`}
 
       <div class="section"><div class="row"><h2>版本</h2><span class="dim" style="font-size:12.5px">由新到舊</span></div>
         ${versions.length ? `<div class="card table-wrap" style="padding:0"><table class="table">
@@ -642,12 +689,12 @@
     const main = RT.shell('admin', '<div class="page"><div class="dim">載入中…</div></div>');
     const users = (await RT.call('listUsers')).users;
     main.innerHTML = `<div class="page">
-      <div class="pagehead"><div class="grow"><h1>帳號管理</h1><div class="muted" style="font-size:13px">管理者可以看到所有專案；廠商只看得到被加入的專案。</div></div>
+      <div class="pagehead"><div class="grow"><h1>帳號管理</h1><div class="muted" style="font-size:13px">管理者看得到所有專案；Acer 同事與廠商只看得到被加入的專案。新帳號第一次登入、或你重設 PIN 之後，對方必須先改成自己的 PIN。</div></div>
         <button class="btn primary" id="addUser">＋ 新增帳號</button></div>
       <div class="card table-wrap" style="padding:0"><table class="table"><thead><tr><th>帳號</th><th>顯示名稱</th><th>角色</th><th>公司</th><th>Email</th><th>通知</th><th>狀態</th><th></th></tr></thead>
       <tbody>${users.map((u) => `<tr class="click" data-u="${esc(u.username)}"><td class="mono">${esc(u.username)}</td><td>${esc(u.displayName)}</td>
-        <td>${u.role === 'admin' ? '管理者' : '廠商'}</td><td>${esc(u.company || '')}</td><td>${esc(u.email || '')}</td><td>${u.notify ? '✓' : ''}</td>
-        <td>${u.active ? '<span style="color:var(--ok)">啟用</span>' : '<span class="dim">停用</span>'}</td><td><button class="btn sm ghost">編輯</button></td></tr>`).join('')}</tbody></table></div>
+        <td>${esc(RT.roleLabel(u.role))}</td><td>${esc(u.company || '')}</td><td>${esc(u.email || '')}</td><td>${u.notify ? '✓' : ''}</td>
+        <td>${u.active ? '<span style="color:var(--ok)">啟用</span>' : '<span class="dim">停用</span>'}${u.mustChangePin ? ' <span class="dim" title="還在用你給的預設 PIN，下次登入會被要求變更">・待改 PIN</span>' : ''}</td><td><button class="btn sm ghost">編輯</button></td></tr>`).join('')}</tbody></table></div>
       ${RT.isDemo ? '<p class="dim" style="font-size:12.5px;margin-top:12px">試用模式不會真的寄信，通知內容會顯示在瀏覽器的開發者主控台。</p>' : ''}
     </div>`;
     $('#addUser').onclick = () => userModal(null);
@@ -660,11 +707,13 @@
       body: `<div class="grid2">
           <label class="field"><span>帳號（英數字，登入用）</span><input type="text" name="username" value="${esc(u ? u.username : '')}" ${u ? 'readonly' : ''} autocapitalize="off"></label>
           <label class="field"><span>顯示名稱</span><input type="text" name="displayName" value="${esc(u ? u.displayName : '')}"></label>
-          <label class="field"><span>角色</span><select name="role"><option value="vendor">廠商</option><option value="admin" ${u && u.role === 'admin' ? 'selected' : ''}>管理者</option></select></label>
+          <label class="field"><span>角色</span><select name="role">${['vendor', 'acer', 'admin'].map((r) => `<option value="${r}" ${(u ? u.role : 'vendor') === r ? 'selected' : ''}>${RT.roleLabel(r)}</option>`).join('')}</select></label>
           <label class="field"><span>公司 / 單位</span><input type="text" name="company" value="${esc(u ? u.company : '')}"></label>
           <label class="field"><span>Email（通知用）</span><input type="email" name="email" value="${esc(u ? u.email : '')}"></label>
-          <label class="field"><span>${u ? '重設 PIN（空白 = 不變）' : 'PIN（4–12 位數字）'}</span><input type="text" name="pin" inputmode="numeric" autocomplete="off"></label>
+          <label class="field"><span>${u ? '重設 PIN（空白 = 不變）' : '預設 PIN（4–12 位數字）'}</span><input type="text" name="pin" inputmode="numeric" autocomplete="off"></label>
         </div>
+        <p class="dim" style="font-size:12.5px;margin:0 0 10px">${u && u.username.toLowerCase() === RT.user().username.toLowerCase() ? '這是你自己的帳號；改自己的 PIN 請用右上角「變更 PIN」。' : '對方用這組 PIN 第一次登入後，系統會要求他改成自己的 PIN。'}<br>
+          角色權限：<b>Acer同事</b>＝看被加入的專案、可看及建立內部註記、可設定所有註記狀態；<b>廠商</b>＝看被加入的專案、看不到內部註記；<b>管理者</b>＝全部權限。</p>
         <div class="row wrap" style="gap:18px">
           <label class="chk"><input type="checkbox" name="notify" ${u ? (u.notify ? 'checked' : '') : 'checked'}> 寄送 Email 通知</label>
           <label class="chk"><input type="checkbox" name="active" ${!u || u.active ? 'checked' : ''}> 啟用</label>
@@ -690,6 +739,13 @@
     const { parts } = parseHash();
     if (!RT.session && parts[0] && parts[0] !== 'login' && parts[0] !== 's') sessionStorage.setItem('rt_after_login', location.hash);
     route();
-    if (RT.session && !RT.isDemo) RT.call('me').catch((e) => { if (e.code === 'AUTH') RT.logout(true); });
+    if (RT.session && !RT.isDemo) {
+      RT.call('me').then((res) => {
+        if (RT.isGuest()) return;
+        const was = RT.needsPinChange();
+        RT.updateUser(res.user);
+        if (was !== RT.needsPinChange()) route();
+      }).catch((e) => { if (e.code === 'AUTH') RT.logout(true); });
+    }
   });
 })();

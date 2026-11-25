@@ -11,6 +11,8 @@
 
   const escText = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+  RT.pendingSubs = RT.pendingSubs || {}; // 已載入的字幕（切換頁面時保留，只存在記憶體）
+
   RT.pageReview = async function (vid, q) {
     const main = RT.shell('projects', '<div class="dim" style="padding:30px">載入中…</div>');
     let data;
@@ -19,7 +21,7 @@
     const version = data.versions.find((v) => v.id === vid);
     const project = data.project;
     const user = RT.user();
-    const isAdmin = RT.isAdmin(), isGuest = RT.isGuest();
+    const isAdmin = RT.isAdmin(), isGuest = RT.isGuest(), isStaff = RT.isStaff();
     const canComment = !isGuest || RT.session.share.canComment;
     const peopleMap = {};
     data.people.forEach((p) => { peopleMap[p.username.toLowerCase()] = p; });
@@ -28,8 +30,10 @@
     const S = {
       notes: data.notes, sel: q.note || null, inF: null, outF: null, draftFrame: null, attach: [], drawMode: false,
       guide: localStorage.getItem('rt_guide') || '', filters: { status: new Set(RTCore.NOTE_STATUS), q: '', assignee: '', tag: '' },
-      sort: 'tc', replyDraft: {}, replyAttach: {}, compare: null, timers: [], loopOn: false, lastSig: ''
+      sort: 'tc', replyDraft: {}, replyAttach: {}, compare: null, timers: [], loopOn: false, lastSig: '', src: null
     };
+    // 字幕狀態
+    const SUB = { cues: [], errors: [], name: '', text: '', show: true, offset: false, onlyIssues: false, curKey: '' };
 
     /* ---------------- 版面 ---------------- */
     const statusSel = isGuest ? RT.statusPill(version.status)
@@ -52,13 +56,14 @@
           <div class="stage" id="stage">
             <div class="panes" id="panes">
               <div class="pane" id="paneA"><video id="vA"></video>
-                <div class="vlayer" id="layerA"><canvas class="guides"></canvas><canvas class="annot"></canvas><div class="wm hidden"></div></div>
+                <div class="vlayer" id="layerA"><canvas class="guides"></canvas><div class="subs-ov" id="subOv"></div><canvas class="annot"></canvas><div class="wm hidden"></div></div>
                 <div class="pane-label hidden"></div><div class="tc-burn"></div></div>
               <div class="pane hidden" id="paneB"><video id="vB" muted></video>
                 <div class="vlayer" id="layerB"><canvas class="guides"></canvas><div class="wm hidden"></div></div>
                 <div class="pane-label"></div><div class="tc-burn"></div>
                 <button class="btn sm" id="cmpClose" style="position:absolute;bottom:8px;right:8px">結束比對</button></div>
             </div>
+            <div class="meter hidden" id="meter" title="音量表（dBFS）：上方燈號黃色＝超過上限、紅色＝爆音；下方數字＝目前為止的最大峰值。點一下重設"><canvas></canvas></div>
             <div class="loader" id="loader"></div>
           </div>
           <div class="timeline" id="tl"><div class="tl-track"><div class="tl-fill"></div></div><div class="tl-marks"></div>
@@ -80,6 +85,8 @@
             <button class="btn sm" data-t="out" title="設定出點 (O)">出點 O</button>
             <button class="btn sm" data-t="loop" id="btnLoop" title="入出點之間循環播放 (R)">⟲ 循環</button>
             <span class="sp"></span>
+            <button class="btn sm" data-t="subs" id="btnSubs" title="顯示 / 隱藏字幕 (S)">字幕</button>
+            <button class="btn sm" data-t="meter" id="btnMeter" title="音量表 (M)">音量表</button>
             <select id="guideSel" title="安全框 / 比例遮罩 (G)">${RT.GUIDES.map((g) => `<option value="${g.id}" ${g.id === S.guide ? 'selected' : ''}>${g.label}</option>`).join('')}</select>
             <button class="btn sm" data-t="fs" title="全螢幕 (F)">⛶ 全螢幕</button>
           </div>
@@ -99,6 +106,12 @@
           </div>` : ''}
         </div>
         <aside class="rv-side">
+          <div class="side-tabs" id="sideTabs">
+            <button data-tab="notes" class="on">註記 <span class="cnt" id="tabCntNotes"></span></button>
+            <button data-tab="subs">字幕 <span class="cnt" id="tabCntSubs"></span></button>
+            <button data-tab="audio">聲音 <span class="cnt" id="tabCntAudio"></span></button>
+          </div>
+          <div class="side-pane" data-pane="notes">
           ${canComment ? `<div class="composer" id="composer">
             <div class="at"><span>於</span><span class="mono" id="cTC">--</span><span id="cRange" class="dim"></span><span class="sp"></span>
               <button class="btn sm ghost hidden" id="cClearIO">清除入出點</button></div>
@@ -109,7 +122,7 @@
               <button class="btn sm" id="cAttachBtn" title="附加參考圖片（也可直接貼上）">📎 圖片</button><input type="file" id="cAttachFile" accept="image/*" multiple hidden>
               ${isGuest ? '' : `<select id="cAssignee" title="負責人"><option value="">負責人</option>${data.people.map((p) => `<option value="${esc(p.username.toLowerCase())}">${esc(p.displayName)}</option>`).join('')}</select>
               <input type="date" id="cDue" title="截止日">`}
-              ${isAdmin ? '<label class="chk" title="內部註記：廠商與訪客看不到" style="font-size:12.5px"><input type="checkbox" id="cInternal"> 內部</label>' : ''}
+              ${isStaff ? '<label class="chk" title="內部註記：廠商與訪客看不到" style="font-size:12.5px"><input type="checkbox" id="cInternal"> 內部</label>' : ''}
               <span class="sp"></span>
               <button class="btn primary sm" id="cSend">送出註記</button>
             </div>
@@ -122,6 +135,38 @@
           </div>
           <div class="notes" id="notes"></div>
           <div class="side-foot"><span id="noteCount"></span><span class="sp"></span><button class="btn sm ghost" id="refreshBtn" title="重新整理註記">⟳</button></div>
+          </div>
+          <div class="side-pane hidden" data-pane="subs">
+            <div class="tool-head">
+              <div class="row"><button class="btn sm primary" id="srtPick">載入字幕檔</button><input type="file" id="srtFile" accept=".srt,.vtt,text/plain" hidden>
+                <span class="grow dim ellipsis" id="srtName">尚未載入（SRT / VTT，只在你的電腦上讀取，不會上傳）</span>
+                <button class="btn sm ghost hidden" id="srtClear" title="移除字幕">✕</button></div>
+              <div class="row wrap" style="gap:4px 14px">
+                <label class="chk"><input type="checkbox" id="srtShow" checked> 疊在畫面上</label>
+                <label class="chk hidden" id="srtOffsetWrap" title="字幕檔的時間是以影片起始 TC 算起（例如 01:00:00,000 對應影片第一格）"><input type="checkbox" id="srtOffset"> 時間從起始 TC 算起</label>
+                <label class="chk"><input type="checkbox" id="srtOnlyIssues"> 只看有問題的</label>
+                <span class="sp"></span><button class="btn sm ghost" id="srtRules">檢查規則</button>
+              </div>
+              <div id="srtSummary" class="tool-summary"></div>
+            </div>
+            <div class="tool-list" id="srtList"><div class="empty">載入字幕檔後，會逐句列出時間碼並自動檢查：<br>重疊、間隔太短、顯示太短 / 太長、閱讀速度、每行字數、行數、超出影片長度。<br>點一句可跳到該格；「＋註記」可把那句字幕直接加為註記。</div></div>
+          </div>
+          <div class="side-pane hidden" data-pane="audio">
+            <div class="tool-head">
+              <div class="row wrap" style="gap:6px 10px">
+                <button class="btn sm" id="audMeterBtn">顯示音量表</button>
+                <label class="row" style="gap:6px;font-size:12.5px">上限 <select id="audThr" style="height:28px">${[0, -0.5, -1, -2, -3, -6].map((d) => `<option value="${d}">${d === 0 ? '0' : d} dBFS</option>`).join('')}</select></label>
+                <span class="sp"></span><button class="btn sm ghost" id="audReset">重設</button>
+              </div>
+              <div class="aud-live" id="audLive"></div>
+            </div>
+            <div class="tool-list">
+              <div class="tool-sec"><div class="row"><b>播放時偵測到的超標</b><span class="sp"></span><span class="dim" style="font-size:12px">時間約 ±2 格</span></div><div id="audEvents"></div></div>
+              <div class="tool-sec"><div class="row"><b>整段分析</b><span class="sp"></span><button class="btn sm primary" id="audScan">開始分析</button></div>
+                <p class="dim" style="font-size:12.5px;margin:6px 0 0">不用播放，直接讀取整個檔案的聲音：峰值、True Peak、整合響度（LUFS），並列出所有超過上限的時間點。本機檔案最準；雲端連結需允許跨網域讀取。</p>
+                <div id="audReport"></div></div>
+            </div>
+          </div>
         </aside>
       </div>
     </div>`;
@@ -135,7 +180,7 @@
     $('#fpsLbl').textContent = version.fps + (player.df ? ' DF' : '') + ' fps';
 
     // 浮水印
-    if (project.watermark && !isAdmin) {
+    if (project.watermark && !isStaff) {
       const txt = `${user.displayName}　${RT.todayStr()}`;
       $$('.wm').forEach((w) => { w.classList.remove('hidden'); w.innerHTML = '<div>' + Array(60).fill(`<span>${esc(txt)}</span>`).join('') + '</div>'; });
     }
@@ -148,7 +193,7 @@
         const g = $('canvas.guides', layer), dpr = window.devicePixelRatio || 1;
         g.width = Math.max(1, Math.round(r.w * dpr)); g.height = Math.max(1, Math.round(r.h * dpr));
         RT.drawGuides(g, S.guide);
-        if (p === player) annot.resize(r.w, r.h);
+        if (p === player) { annot.resize(r.w, r.h); $('#subOv').style.fontSize = Math.max(11, r.h * 0.048) + 'px'; }
       });
       renderMarks();
     }
@@ -169,6 +214,7 @@
       $('.tl-fill').style.width = pct + '%';
       updateComposerTC();
       updateOverlay();
+      if (SUB.cues.length) updateSubs();
     }
     player.on('frame', () => {
       updateFrameUI();
@@ -248,6 +294,11 @@
       try {
         await player.load(src);
       } catch (e) { showLoader(null, e.message); return; }
+      S.src = src;
+      AUD.resetLive();
+      $('#audReport').innerHTML = '';
+      if (player.tainted && AUD.meter && AUD.meter.ctx) addWarn('這個雲端連結不允許讀取聲音資料：音量表無法使用，聲音也可能被靜音。請重新整理頁面，或改用本機檔案。');
+      if (SUB.cues.length) recheckSubs();
       let info = null;
       try { info = await RT.probeMp4(src); } catch (e) { info = null; }
       const total = (info && info.frames) || version.durationFrames || 0;
@@ -289,6 +340,8 @@
     /* ---------------- 傳輸控制 ---------------- */
     const secFrames = () => TC.nominal(player.fps);
     function transport(t) {
+      if (t === 'subs') { setSubShow(!SUB.show); return; }
+      if (t === 'meter') { AUD.toggle(); return; }
       if (!player.loaded() && t !== 'fs') return;
       switch (t) {
         case 'play': player.toggle(); break;
@@ -613,7 +666,7 @@
     }
     function statusControl(n) {
       if (isGuest) return RT.statusPill(n.status);
-      const allowed = isAdmin ? RTCore.NOTE_STATUS : RTCore.VENDOR_NOTE_STATUS;
+      const allowed = isStaff ? RTCore.NOTE_STATUS : RTCore.VENDOR_NOTE_STATUS;
       const opts = RTCore.NOTE_STATUS.filter((s) => allowed.includes(s) || s === n.status);
       return `<select class="pill st-${esc(n.status)}" data-status="${esc(n.id)}" style="height:22px;padding:0 4px;border:1px solid transparent">${opts.map((s) => `<option ${s === n.status ? 'selected' : ''} ${allowed.includes(s) ? '' : 'disabled'}>${s}</option>`).join('')}</select>`;
     }
@@ -651,8 +704,8 @@
             <div class="attach-list" data-rattach="${esc(n.id)}"></div>
             <div class="row wrap" style="margin-top:6px">
               <button class="btn sm" data-rimg="${esc(n.id)}">📎 圖片</button>
-              ${isGuest ? '' : `<select data-rstatus="${esc(n.id)}" style="height:26px;font-size:12.5px"><option value="">狀態不變</option>${(isAdmin ? RTCore.NOTE_STATUS : RTCore.VENDOR_NOTE_STATUS).filter((s) => s !== n.status).map((s) => `<option>${s}</option>`).join('')}</select>`}
-              ${isAdmin ? `<label class="chk" style="font-size:12px"><input type="checkbox" data-rinternal="${esc(n.id)}"> 內部</label>` : ''}
+              ${isGuest ? '' : `<select data-rstatus="${esc(n.id)}" style="height:26px;font-size:12.5px"><option value="">狀態不變</option>${(isStaff ? RTCore.NOTE_STATUS : RTCore.VENDOR_NOTE_STATUS).filter((s) => s !== n.status).map((s) => `<option>${s}</option>`).join('')}</select>`}
+              ${isStaff ? `<label class="chk" style="font-size:12px"><input type="checkbox" data-rinternal="${esc(n.id)}"> 內部</label>` : ''}
               <span class="sp"></span><button class="btn sm primary" data-rsend="${esc(n.id)}">回覆</button>
             </div></div>` : ''}
           <div class="row wrap" style="margin-top:8px">
@@ -674,6 +727,7 @@
         : `<div class="empty" style="margin:10px">${S.notes.length ? '沒有符合篩選條件的註記' : (canComment ? '還沒有註記。<br>暫停在需要修改的畫面，在上方輸入說明，或按 D 在畫面上畫記。' : '還沒有註記。')}</div>`;
       box.scrollTop = st;
       $('#noteCount').textContent = `共 ${S.notes.length} 則` + (list.length !== S.notes.length ? `・顯示 ${list.length}` : '');
+      $('#tabCntNotes').textContent = S.notes.length ? S.notes.length : '';
       RTCore.NOTE_STATUS.forEach((s) => { const c = $(`[data-cnt="${s}"]`); if (c) c.textContent = S.notes.filter((n) => n.status === s).length; });
       const ids = $$('img[data-file]', box).map((i) => i.dataset.file);
       if (ids.length) RT.getFiles(ids).then((files) => {
@@ -801,7 +855,7 @@
           ${player.loaded() ? `<div class="grid2">
             <label class="field"><span>入點</span><input type="text" class="mono" name="in" value="${esc(tcOf(n))}"></label>
             <label class="field"><span>出點</span><input type="text" class="mono" name="out" value="${esc(tcOf(n, 'out'))}"></label></div>` : ''}
-          ${isAdmin ? `<label class="chk"><input type="checkbox" name="internal" ${n.internal ? 'checked' : ''}> 內部註記（廠商與訪客看不到）</label>` : ''}
+          ${isStaff ? `<label class="chk"><input type="checkbox" name="internal" ${n.internal ? 'checked' : ''}> 內部註記（廠商與訪客看不到）</label>` : ''}
           ${n.drawing || n.pinX !== null ? '<label class="chk" style="margin-top:8px"><input type="checkbox" name="clearDraw"> 移除畫記與定位點</label>' : ''}`,
         okText: '儲存', noEnter: true,
         onOk: async (m) => {
@@ -886,7 +940,7 @@
     function showHelp() {
       const rows = [['Space / K', '播放 / 暫停'], ['J / L', '倒轉 / 快轉（連按加速）'], ['← / →', '上一格 / 下一格'], ['Shift + ← / →', '後退 / 前進 1 秒'],
         ['Home / End', '開頭 / 結尾'], ['↑ / ↓', '上一則 / 下一則註記'], ['I / O', '設定入點 / 出點'], ['Alt + X', '清除入出點'], ['R', '循環播放'],
-        ['D', '畫記模式'], ['Ctrl + Z / Ctrl + Shift + Z', '復原 / 重做畫記'], ['G', '切換安全框 / 遮罩'], ['F', '全螢幕'], ['C', '輸入註記'], ['Ctrl + Enter', '送出註記 / 回覆'], ['Esc', '結束畫記 / 取消選取']];
+        ['D', '畫記模式'], ['Ctrl + Z / Ctrl + Shift + Z', '復原 / 重做畫記'], ['G', '切換安全框 / 遮罩'], ['S', '顯示 / 隱藏字幕'], ['M', '音量表'], ['F', '全螢幕'], ['C', '輸入註記'], ['Ctrl + Enter', '送出註記 / 回覆'], ['Esc', '結束畫記 / 取消選取']];
       RT.modal({ title: '快捷鍵', body: `<table class="table">${rows.map((r) => `<tr><td><span class="kbd">${esc(r[0])}</span></td><td>${esc(r[1])}</td></tr>`).join('')}</table>`, okText: null, cancelText: '關閉', noFocus: true });
     }
 
@@ -926,7 +980,7 @@
       pB.on('frame', (f) => { $('.tc-burn', $('#paneB')).textContent = pB.tc(f); });
       S.compare = v;
       $('.pane-label', $('#paneB')).textContent = v.label + '（比對）';
-      $('#paneB .wm').classList.toggle('hidden', !(project.watermark && !isAdmin));
+      $('#paneB .wm').classList.toggle('hidden', !(project.watermark && !isStaff));
       pB.seekFrame(player.frame);
       setTimeout(layout, 30);
     }
@@ -938,6 +992,296 @@
       $('.pane-label', $('#paneA')).classList.add('hidden');
       setTimeout(layout, 30);
     };
+
+    /* ---------------- 側欄分頁 ---------------- */
+    function showTab(tab) {
+      $$('#sideTabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+      $$('.rv-side [data-pane]').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== tab));
+      if (tab === 'subs') scrollCurCue();
+    }
+    $('#sideTabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab); };
+
+    /* ---------------- 字幕（SRT / VTT） ---------------- */
+    const subOv = $('#subOv');
+    function setSubShow(on) {
+      SUB.show = on;
+      $('#srtShow').checked = on;
+      $('#btnSubs').classList.toggle('on', on && SUB.cues.length > 0);
+      updateSubs(true);
+    }
+    async function loadSubFile(file) {
+      try {
+        const text = RT.decodeText(await file.arrayBuffer());
+        applySubText(text, file.name, true);
+        RT.pendingSubs[vid] = { name: file.name, text };
+      } catch (e) { RT.fail(e); }
+    }
+    function applySubText(text, name, fresh) {
+      const res = RT.parseSubtitles(text);
+      if (!res.cues.length) { RT.toast('讀不到任何字幕：請確認是 SRT 或 VTT 格式', 'bad'); return; }
+      SUB.text = text; SUB.name = name; SUB.cues = res.cues; SUB.errors = res.errors;
+      // 字幕時間是否以起始 TC 算起（例如 01:00:00,000）：自動判斷
+      const startSec = player.startFrames / player.exactFps;
+      $('#srtOffsetWrap').classList.toggle('hidden', !player.startFrames);
+      SUB.offset = !!player.startFrames && res.cues[0].start >= startSec - 1;
+      $('#srtOffset').checked = SUB.offset;
+      $('#srtName').textContent = name;
+      $('#srtName').title = name;
+      $('#srtClear').classList.remove('hidden');
+      recheckSubs();
+      setSubShow(true);
+      if (fresh) { showTab('subs'); RT.toast(`已載入 ${res.cues.length} 句字幕`, 'ok'); }
+    }
+    function recheckSubs() {
+      if (!SUB.cues.length) return;
+      RT.checkSubtitles(SUB.cues, { exactFps: player.exactFps, total: player.total, offsetFrames: SUB.offset ? player.startFrames : 0 });
+      renderSubList();
+      updateSubs(true);
+    }
+    function clearSubs() {
+      SUB.cues = []; SUB.errors = []; SUB.name = ''; SUB.text = '';
+      delete RT.pendingSubs[vid];
+      $('#srtName').textContent = '尚未載入（SRT / VTT，只在你的電腦上讀取，不會上傳）';
+      $('#srtClear').classList.add('hidden');
+      $('#srtSummary').innerHTML = '';
+      $('#tabCntSubs').textContent = '';
+      $('#srtList').innerHTML = '<div class="empty">已移除字幕。</div>';
+      $('#btnSubs').classList.remove('on');
+      subOv.innerHTML = '';
+    }
+    function cueText(c) { return escText(c.text).replace(/\n/g, '<br>'); }
+    function renderSubList() {
+      const cues = SUB.cues;
+      const cnt = { err: 0, warn: 0, info: 0 };
+      cues.forEach((c) => { if (c.level) cnt[c.level]++; });
+      const issues = cnt.err + cnt.warn;
+      $('#tabCntSubs').innerHTML = issues ? `<b class="bad-n">${issues}</b>` : String(cues.length);
+      const last = cues[cues.length - 1];
+      $('#srtSummary').innerHTML = `<span>${cues.length} 句</span>
+        <span>${player.loaded() ? player.tc(cues[0].inF) + ' → ' + player.tc(last.outF) : ''}</span>
+        ${cnt.err ? `<span class="lv-err">錯誤 ${cnt.err}</span>` : ''}${cnt.warn ? `<span class="lv-warn">警告 ${cnt.warn}</span>` : ''}${cnt.info ? `<span class="lv-info">提示 ${cnt.info}</span>` : ''}
+        ${!issues ? '<span class="lv-ok">✓ 沒有發現問題</span>' : ''}
+        ${SUB.errors.length ? `<div class="lv-err" style="width:100%">格式問題：${esc(SUB.errors.slice(0, 3).join('；'))}${SUB.errors.length > 3 ? '…' : ''}</div>` : ''}`;
+      const list = SUB.onlyIssues ? cues.filter((c) => c.level === 'err' || c.level === 'warn') : cues;
+      $('#srtList').innerHTML = list.length ? list.map((c) => `<div class="cue ${c.level ? 'lv-' + c.level : ''}" data-cue="${c.n - 1}">
+          <div class="cue-h"><span class="cue-n">#${c.n}</span><span class="mono cue-tc">${player.tc(c.inF)} → ${player.tc(c.outF)}</span>
+            <span class="sp"></span>${canComment ? `<button class="btn sm ghost" data-cue-note="${c.n - 1}" title="把這句字幕加為註記（自動帶入入出點）">＋註記</button>` : ''}</div>
+          <div class="cue-t">${cueText(c) || '<span class="dim">（空白）</span>'}</div>
+          <div class="dim cue-m" title="顯示時間 / 字數 / 每秒字數">${c.dur.toFixed(2)} 秒・${c.chars} 字・每秒 ${c.cps.toFixed(1)} 字</div>
+          ${c.warn.length ? `<div class="cue-w">${c.warn.map((w) => `<span class="lv-${w[0]}">${esc(w[1])}</span>`).join('')}</div>` : ''}
+        </div>`).join('') : '<div class="empty">沒有需要注意的字幕 👍</div>';
+      SUB.curKey = '';
+      updateSubs(true);
+    }
+    function activeCues(f) { return SUB.cues.filter((c) => f >= c.inF && f <= c.outF); }
+    function updateSubs(force) {
+      if (!SUB.cues.length) { subOv.innerHTML = ''; return; }
+      const act = player.loaded() ? activeCues(player.frame) : [];
+      const key = act.map((c) => c.n).join(',') + '|' + SUB.show;
+      if (key === SUB.curKey && !force) return;
+      SUB.curKey = key;
+      subOv.innerHTML = SUB.show ? act.map((c) => `<div class="sub-line ${RT.subIsTop(c.raw) ? 'top' : ''}"><span>${RT.subHTML(c.raw)}</span></div>`).join('') : '';
+      $$('#srtList .cue.cur').forEach((el) => el.classList.remove('cur'));
+      act.forEach((c) => { const el = $(`#srtList [data-cue="${c.n - 1}"]`); if (el) el.classList.add('cur'); });
+      scrollCurCue();
+    }
+    function scrollCurCue() {
+      const pane = $('.rv-side [data-pane="subs"]');
+      if (!pane || pane.classList.contains('hidden')) return;
+      const el = $('#srtList .cue.cur');
+      const box = $('#srtList');
+      if (el && (el.offsetTop < box.scrollTop || el.offsetTop + el.offsetHeight > box.scrollTop + box.clientHeight)) {
+        box.scrollTop = el.offsetTop - box.clientHeight / 3;
+      }
+    }
+    $('#srtPick').onclick = () => $('#srtFile').click();
+    $('#srtFile').onchange = (e) => { if (e.target.files[0]) loadSubFile(e.target.files[0]); e.target.value = ''; };
+    $('#srtClear').onclick = clearSubs;
+    $('#srtShow').onchange = (e) => setSubShow(e.target.checked);
+    $('#srtOffset').onchange = (e) => { SUB.offset = e.target.checked; recheckSubs(); };
+    $('#srtOnlyIssues').onchange = (e) => { SUB.onlyIssues = e.target.checked; renderSubList(); };
+    $('#srtList').addEventListener('click', (e) => {
+      const nb = e.target.closest('[data-cue-note]');
+      if (nb) { cueToNote(SUB.cues[Number(nb.dataset.cueNote)]); return; }
+      const row = e.target.closest('[data-cue]');
+      if (row && player.loaded()) { player.pause(); player.seekFrame(SUB.cues[Number(row.dataset.cue)].inF); }
+    });
+    function cueToNote(c) {
+      if (!player.loaded()) { RT.toast('請先載入影片'); return; }
+      player.pause();
+      S.inF = Math.max(0, c.inF); S.outF = Math.max(S.inF, c.outF); ioChanged();
+      player.seekFrame(S.inF);
+      showTab('notes');
+      const ta = $('#cText');
+      const quote = `【字幕 #${c.n}】「${c.text.replace(/\n/g, ' / ')}」\n`;
+      if (!ta.value.startsWith(quote)) ta.value = quote + ta.value;
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+    $('#srtRules').onclick = () => {
+      const r = RT.subRules();
+      const fields = [['cjkCps', '中文：每秒最多幾個字'], ['cjkLine', '中文：每行最多幾個字'], ['latinCps', '英文：每秒最多幾個字元'], ['latinLine', '英文：每行最多幾個字元'],
+        ['maxLines', '最多幾行'], ['minDur', '最短顯示（秒）'], ['maxDur', '最長顯示（秒）'], ['minGapFrames', '兩句之間至少間隔（格）']];
+      RT.modal({
+        title: '字幕檢查規則',
+        body: `<p class="dim" style="margin:0 0 10px;font-size:12.5px">預設值參考常見串流平台規範（繁中每秒 9 字、每行 16 字；英文每秒 20 字元、每行 42 字元）。中文字數不含標點與空白。設定只存在這台電腦。</p>
+          <div class="grid2">${fields.map((f) => `<label class="field"><span>${f[1]}</span><input type="number" step="any" min="0" name="${f[0]}" value="${r[f[0]]}"></label>`).join('')}</div>`,
+        okText: '套用', extraFoot: '<button class="btn ghost" data-def>恢復預設</button>',
+        onOpen: (m, close) => { $('[data-def]', m).onclick = () => { localStorage.removeItem('rt_sub_rules'); close(); recheckSubs(); RT.toast('已恢復預設規則'); }; },
+        onOk: (m) => {
+          const o = {};
+          fields.forEach((f) => { const v = Number($(`[name=${f[0]}]`, m).value); if (isFinite(v) && v >= 0) o[f[0]] = v; });
+          localStorage.setItem('rt_sub_rules', JSON.stringify(o));
+          recheckSubs();
+        }
+      });
+    };
+
+    /* ---------------- 聲音：音量表與整段分析 ---------------- */
+    const AUD = {
+      meter: null, on: false, raf: 0, thr: Number(localStorage.getItem('rt_aud_thr') || -1),
+      st: null, events: [],
+      resetLive() {
+        AUD.st = { peakDb: [-Infinity, -Infinity], rmsDb: [-Infinity, -Infinity], holdDb: [-Infinity, -Infinity], holdT: [0, 0],
+          maxDb: [-Infinity, -Infinity], clip: [false, false], over: [false, false] };
+        AUD.events = [];
+        renderAudLive(); renderAudEvents();
+        if (AUD.on) RT.drawMeter($('#meter canvas'), AUD.st, AUD.thr);
+      },
+      toggle() { AUD.setOn(!AUD.on); },
+      setOn(on) {
+        if (on) {
+          if (player.tainted) { RT.toast('這個雲端連結不允許讀取聲音資料，無法顯示音量表（請改用本機檔案）', 'bad'); return; }
+          try {
+            if (!AUD.meter) AUD.meter = new RT.AudioMeter(vA);
+            AUD.meter.attach();
+          } catch (e) { RT.fail(e); return; }
+        }
+        AUD.on = on;
+        $('#meter').classList.toggle('hidden', !on);
+        $('#btnMeter').classList.toggle('on', on);
+        $('#audMeterBtn').textContent = on ? '隱藏音量表' : '顯示音量表';
+        cancelAnimationFrame(AUD.raf);
+        if (on) AUD.loop();
+        setTimeout(layout, 20);
+      },
+      loop() {
+        AUD.raf = requestAnimationFrame(AUD.loop);
+        const st = AUD.st, now = performance.now();
+        const playing = player.playing && !player.reverse && !vA.paused;
+        const r = playing ? AUD.meter.read() : null;
+        for (let ch = 0; ch < 2; ch++) {
+          if (r) {
+            const pk = RT.toDb(r.peak[ch]);
+            st.peakDb[ch] = pk; st.rmsDb[ch] = RT.toDb(r.rms[ch]);
+            if (pk > st.holdDb[ch] || now - st.holdT[ch] > 1500) { st.holdDb[ch] = pk; st.holdT[ch] = now; }
+            if (pk > st.maxDb[ch]) st.maxDb[ch] = pk;
+            const isClip = r.peak[ch] >= 0.99989, isOver = pk >= AUD.thr;
+            if (isClip) st.clip[ch] = true;
+            if (isOver) { st.over[ch] = true; logOver(ch, pk, isClip); }
+          } else {
+            st.peakDb[ch] = Math.max(-Infinity, st.peakDb[ch] - 1.2); // 停止時讓表慢慢落下
+            st.rmsDb[ch] = Math.max(-Infinity, st.rmsDb[ch] - 1.2);
+            if (now - st.holdT[ch] > 1500) st.holdDb[ch] = -Infinity;
+          }
+        }
+        RT.drawMeter($('#meter canvas'), st, AUD.thr);
+        if (r && now - (AUD.lastLive || 0) > 250) { AUD.lastLive = now; renderAudLive(); }
+      }
+    };
+    function logOver(ch, db, isClip) {
+      const f = player.frame, last = AUD.events[AUD.events.length - 1];
+      const near = Math.round(player.exactFps / 2); // 半秒內的視為同一段
+      if (last && f >= last.inF - 1 && f - last.outF <= near) {
+        last.outF = Math.max(last.outF, f); last.maxDb = Math.max(last.maxDb, db); last.ch[ch] = true; last.clip = last.clip || isClip;
+        renderAudEventsThrottled();
+      } else {
+        AUD.events.push({ inF: f, outF: f, maxDb: db, ch: { [ch]: true }, clip: isClip });
+        renderAudEvents();
+      }
+    }
+    let evTimer = 0;
+    function renderAudEventsThrottled() { if (!evTimer) evTimer = setTimeout(() => { evTimer = 0; renderAudEvents(); }, 400); }
+    function chLabel(ch) { return ch[0] && ch[1] ? 'L+R' : ch[0] ? 'L' : 'R'; }
+    function renderAudLive() {
+      const st = AUD.st;
+      $('#audLive').innerHTML = `<div class="aud-grid">
+          <div><span class="k">最大峰值 L</span><span class="v ${st.maxDb[0] >= AUD.thr ? 'lv-err' : ''}">${RT.fmtDb(st.maxDb[0])}</span></div>
+          <div><span class="k">最大峰值 R</span><span class="v ${st.maxDb[1] >= AUD.thr ? 'lv-err' : ''}">${RT.fmtDb(st.maxDb[1])}</span></div>
+          <div><span class="k">超過上限</span><span class="v ${AUD.events.length ? 'lv-warn' : ''}">${AUD.events.filter((e) => !e.clip).length} 段</span></div>
+          <div><span class="k">爆音</span><span class="v ${AUD.events.some((e) => e.clip) ? 'lv-err' : ''}">${AUD.events.filter((e) => e.clip).length} 段</span></div>
+        </div><div class="dim" style="font-size:11.5px;margin-top:4px">單位 dBFS（0 = 數位滿格）。播放時即時讀取；要完整檢查請用下方「整段分析」。</div>`;
+      const n = AUD.events.length;
+      $('#tabCntAudio').innerHTML = AUD.events.some((e) => e.clip) || (AUD.report && AUD.report.clip) ? '<b class="bad-n">!</b>' : n ? `<b class="warn-n">${n}</b>` : '';
+    }
+    function renderAudEvents() {
+      const box = $('#audEvents');
+      box.innerHTML = AUD.events.length ? AUD.events.map((e, i) => `<div class="aud-ev ${e.clip ? 'lv-err' : 'lv-warn'}" data-aev="${i}">
+          <span class="mono">${player.tc(e.inF)}</span>${e.outF > e.inF ? `<span class="dim mono">→ ${player.tc(e.outF)}</span>` : ''}
+          <span class="sp"></span><span>${chLabel(e.ch)}</span><b>${RT.fmtDb(e.maxDb)}</b><span class="tag-s">${e.clip ? '爆音' : '超過上限'}</span></div>`).join('')
+        : '<div class="dim" style="font-size:12.5px;padding:6px 0">播放時若聲音超過上限，會記錄在這裡（點一下跳到該時間）。</div>';
+      renderAudLive();
+    }
+    $('#audEvents').addEventListener('click', (e) => {
+      const r = e.target.closest('[data-aev]');
+      if (r && player.loaded()) { player.pause(); player.seekFrame(AUD.events[Number(r.dataset.aev)].inF); }
+    });
+    $('#audThr').value = String(AUD.thr);
+    $('#audThr').onchange = (e) => { AUD.thr = Number(e.target.value); localStorage.setItem('rt_aud_thr', AUD.thr); AUD.resetLive(); };
+    $('#audReset').onclick = () => AUD.resetLive();
+    $('#audMeterBtn').onclick = () => AUD.toggle();
+    $('#meter').onclick = () => AUD.resetLive();
+
+    $('#audScan').onclick = async () => {
+      if (!S.src) { RT.toast('請先載入影片'); return; }
+      const btn = $('#audScan'), box = $('#audReport');
+      btn.disabled = true;
+      box.innerHTML = '<div class="aud-progress"><i style="width:0"></i></div><div class="dim" style="font-size:12.5px">讀取聲音中…（檔案越大越久）</div>';
+      try {
+        await new Promise((r) => setTimeout(r, 30));
+        const buf = await RT.decodeAudio(S.src);
+        box.querySelector('.dim').textContent = '分析中…';
+        const rep = await RT.analyzeAudio(buf, AUD.thr, (p) => { const bar = box.querySelector('.aud-progress i'); if (bar) bar.style.width = Math.round(p * 100) + '%'; });
+        rep.clip = rep.clipSamples.some((n) => n > 0);
+        AUD.report = rep;
+        renderReport(rep);
+      } catch (e) {
+        box.innerHTML = `<p class="err" style="font-size:12.5px">${esc(e.message)}</p>`;
+      } finally { btn.disabled = false; renderAudLive(); }
+    };
+    function renderReport(rep) {
+      const chName = (c) => rep.channels === 1 ? '單聲道' : rep.channels === 2 ? ['L', 'R'][c] : ['L', 'R', 'C', 'LFE', 'Ls', 'Rs', '7', '8'][c] || ('Ch' + (c + 1));
+      const maxPk = Math.max(...rep.peakDb), maxTp = Math.max(...rep.truePeakDb);
+      const clipTotal = rep.clipSamples.reduce((s, n) => s + n, 0);
+      const verdict = rep.clip ? ['lv-err', '有爆音（數位滿格）'] : maxPk >= rep.thrDb ? ['lv-warn', `峰值超過上限 ${rep.thrDb} dBFS`] : maxTp >= rep.thrDb ? ['lv-warn', `取樣峰值沒超標，但 True Peak 超過上限`] : ['lv-ok', '沒有爆音，峰值在上限以內'];
+      const hitsHtml = rep.hits.slice(0, 300).map((h, i) => {
+        const inF = Math.floor(h.start * player.exactFps), outF = Math.floor(h.end * player.exactFps);
+        const isClip = h.max >= 0.99989;
+        return `<div class="aud-ev ${isClip ? 'lv-err' : 'lv-warn'}" data-hit="${i}" data-f="${inF}"><span class="mono">${player.tc(inF)}</span>${outF > inF ? `<span class="dim mono">→ ${player.tc(outF)}</span>` : ''}
+          <span class="sp"></span><span>${chName(h.ch)}</span><b>${RT.fmtDb(RT.toDb(h.max), 2)}</b><span class="tag-s">${isClip ? '爆音' : '超過上限'}</span></div>`;
+      }).join('');
+      $('#audReport').innerHTML = `<div class="aud-verdict ${verdict[0]}">${verdict[1]}</div>
+        <table class="table aud-table">
+          <tr><th></th>${Array.from({ length: rep.channels }, (_, c) => `<th>${chName(c)}</th>`).join('')}</tr>
+          <tr><td>峰值 (dBFS)</td>${rep.peakDb.map((d) => `<td class="mono ${d >= rep.thrDb ? 'lv-err' : ''}">${RT.fmtDb(d, 2)}</td>`).join('')}</tr>
+          <tr><td title="4 倍超取樣估算的樣本間峰值">True Peak 約 (dBTP)</td>${rep.truePeakDb.map((d) => `<td class="mono ${d >= rep.thrDb ? 'lv-warn' : ''}">${RT.fmtDb(d, 2)}</td>`).join('')}</tr>
+          <tr><td>滿格樣本數</td>${rep.clipSamples.map((n) => `<td class="mono ${n ? 'lv-err' : ''}">${n}</td>`).join('')}</tr>
+        </table>
+        <div class="aud-grid" style="margin-top:8px">
+          <div><span class="k">整合響度</span><span class="v">${isFinite(rep.lufs) ? rep.lufs.toFixed(1) + ' LUFS' : '—'}</span></div>
+          <div><span class="k">短時響度最大</span><span class="v">${isFinite(rep.shortTermMax) ? rep.shortTermMax.toFixed(1) + ' LUFS' : '—'}</span></div>
+          <div><span class="k">長度</span><span class="v">${rep.duration.toFixed(2)} 秒</span></div>
+          <div><span class="k">格式</span><span class="v">${rep.channels} 聲道</span></div>
+        </div>
+        <p class="dim" style="font-size:11.5px;margin:6px 0 10px">參考：電視播出常見規範 -23 ～ -24 LUFS、True Peak ≤ -1 ～ -2 dBTP；網路平台常見約 -14 LUFS。分析時聲音以 48kHz 解碼${clipTotal ? '' : ''}。</p>
+        <div class="row"><b style="font-size:13px">超過上限的時間點（${rep.hits.length}）</b></div>
+        ${rep.hits.length ? hitsHtml + (rep.hits.length > 300 ? `<div class="dim">只列出前 300 筆</div>` : '') : '<div class="dim" style="font-size:12.5px;padding:6px 0">沒有任何地方超過上限。</div>'}`;
+    }
+    $('#audReport').addEventListener('click', (e) => {
+      const r = e.target.closest('[data-f]');
+      if (r && player.loaded()) { player.pause(); player.seekFrame(Number(r.dataset.f)); }
+    });
+    AUD.resetLive();
 
     /* ---------------- 快捷鍵 ---------------- */
     function onKey(e) {
@@ -979,6 +1323,8 @@
           break;
         }
         case 'f': case 'F': handled(); toggleFs(); break;
+        case 's': case 'S': handled(); if (SUB.cues.length) setSubShow(!SUB.show); else showTab('subs'); break;
+        case 'm': case 'M': handled(); AUD.toggle(); break;
         case 'c': case 'C': if ($('#cText')) { handled(); $('#cText').focus(); } break;
         case '?': handled(); showHelp(); break;
         case 'Escape':
@@ -995,6 +1341,9 @@
       document.removeEventListener('fullscreenchange', onFs);
       ro.disconnect();
       S.timers.forEach(clearInterval);
+      cancelAnimationFrame(AUD.raf);
+      clearTimeout(evTimer);
+      if (AUD.meter) AUD.meter.close();
       player.unload();
       if (pB) pB.unload();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -1004,6 +1353,7 @@
     updateFilterOptions();
     renderNotes();
     updateFrameUI();
+    if (RT.pendingSubs[vid]) applySubText(RT.pendingSubs[vid].text, RT.pendingSubs[vid].name, false);
     if (RT.pendingFiles[vid]) loadFile(RT.pendingFiles[vid]);
     else if (version.url) loadUrl(version.url, false);
     else showLoader();

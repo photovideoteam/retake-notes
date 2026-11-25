@@ -118,10 +118,14 @@
   function seedDemo(core, env) {
     if (env.db.all('Users').length) return;
     core.bootstrap('admin', '1234', '管理者');
+    env.db.update('Users', 'admin', { mustChangePin: '' });
     var adminToken = core.handle({ action: 'login', username: 'admin', pin: '1234' }).token;
     core.handle({ action: 'saveUser', token: adminToken, user: { username: 'studio_a', displayName: '動畫廠商 A', role: 'vendor', company: 'Studio A', pin: '5678', notify: true, email: 'vendor@example.com' } });
-    core.handle({ action: 'saveProject', token: adminToken, project: { name: '範例專案：品牌形象短片', description: '試用模式的範例專案，可以自由修改或刪除。', members: ['studio_a'], status: '進行中', watermark: true } });
+    core.handle({ action: 'saveUser', token: adminToken, user: { username: 'acer_amy', displayName: 'Amy（Acer）', role: 'acer', company: 'Acer', pin: '2468', notify: false, email: '' } });
+    core.handle({ action: 'saveProject', token: adminToken, project: { name: '範例專案：品牌形象短片', description: '試用模式的範例專案，可以自由修改或刪除。', members: ['studio_a', 'acer_amy'], status: '進行中', watermark: true } });
     core.handle({ action: 'logout', token: adminToken });
+    // 試用模式的範例帳號不強制改 PIN（方便直接試用）；在「帳號管理」新增的帳號仍會要求改 PIN
+    env.db.all('Users').forEach(function (u) { env.db.update('Users', u.id, { mustChangePin: '' }); });
   }
 
   var localCore = null;
