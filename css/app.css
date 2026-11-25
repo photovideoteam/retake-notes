@@ -344,6 +344,70 @@ label.chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer
 .internal-badge { font-size: 11px; color: #c49bff; background: rgba(122, 44, 255, .18); padding: 0 7px; }
 .carry-badge { font-size: 11px; color: var(--text2); background: #262626; padding: 0 7px; }
 .side-foot { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--text3); display: flex; gap: 8px; align-items: center; }
+/* ---------- 側欄分頁（註記 / 字幕 / 聲音） ---------- */
+.side-tabs { display: flex; border-bottom: 1px solid var(--line); background: #080808; flex: none; }
+.side-tabs button { flex: 1; height: 38px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text3); font: inherit; font-size: 13px; cursor: pointer; letter-spacing: .04em; }
+.side-tabs button:hover { color: var(--text); }
+.side-tabs button.on { color: var(--text); border-bottom-color: var(--accent); background: #111; }
+.side-tabs .cnt { font-family: var(--mono); font-size: 11px; color: var(--text3); margin-left: 3px; }
+.side-tabs .bad-n { color: var(--bad); }
+.side-tabs .warn-n { color: var(--warn); }
+.side-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.side-pane.hidden { display: none; }
+.tool-head { padding: 10px 12px; border-bottom: 1px solid var(--line); background: #0c0c0c; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.tool-head .row { gap: 8px; }
+.tool-list { flex: 1; overflow-y: auto; padding: 6px; }
+.tool-sec { padding: 8px 6px 12px; border-bottom: 1px solid var(--line); }
+.tool-summary { display: flex; gap: 6px 12px; flex-wrap: wrap; font-size: 12px; color: var(--text2); }
+.tool-summary:empty { display: none; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lv-err { color: var(--bad); }
+.lv-warn { color: var(--warn); }
+.lv-info { color: var(--text3); }
+.lv-ok { color: var(--ok); }
+/* 字幕列表 */
+.cue { padding: 7px 9px; border-left: 2px solid transparent; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+.cue:hover { background: #161616; }
+.cue.lv-err { border-left-color: var(--bad); color: inherit; }
+.cue.lv-warn { border-left-color: var(--warn); color: inherit; }
+.cue.lv-info { border-left-color: #555; color: inherit; }
+.cue.cur { background: rgba(0, 174, 205, .12); outline: 1px solid rgba(0, 174, 205, .5); }
+.cue-h { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.cue-n { font-family: var(--mono); color: var(--text3); min-width: 30px; }
+.cue-tc { color: var(--accent2); font-size: 11.5px; white-space: nowrap; }
+.cue-m { font-size: 11px; font-family: var(--mono); }
+.cue-h .btn { height: 20px; padding: 0 6px; font-size: 11px; }
+.cue-t { font-size: 13.5px; line-height: 1.45; word-break: break-word; }
+.cue-w { display: flex; flex-wrap: wrap; gap: 4px; }
+.cue-w span { font-size: 11px; padding: 0 6px; background: #1d1d1d; }
+/* 畫面上的字幕 */
+.subs-ov { position: absolute; inset: 0; pointer-events: none; }
+.sub-line { position: absolute; left: 4%; right: 4%; bottom: 7%; text-align: center; }
+.sub-line.top { bottom: auto; top: 7%; }
+.sub-line + .sub-line:not(.top) { bottom: 18%; }
+.sub-line span { display: inline; color: #fff; font-weight: 600; line-height: 1.3; font-family: var(--font);
+  text-shadow: 0 0 2px #000, 0 0 2px #000, 1px 1px 2px #000, -1px -1px 2px #000, 1px -1px 2px #000, -1px 1px 2px #000; }
+/* 音量表 */
+.meter { width: 108px; flex: none; background: #050505; border-left: 1px solid #1a1a1a; position: relative; cursor: pointer; }
+.meter.hidden { display: none; }
+.meter canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.aud-live { font-size: 12.5px; }
+.aud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.aud-grid > div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid #1d1d1d; padding: 3px 0; font-size: 12.5px; }
+.aud-grid .k { color: var(--text3); }
+.aud-grid .v { font-family: var(--mono); }
+.aud-ev { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 5px 6px; cursor: pointer; border-left: 2px solid currentColor; margin-top: 3px; background: #121212; }
+.aud-ev:hover { background: #1b1b1b; }
+.aud-ev .mono { color: var(--text); }
+.aud-ev b { font-family: var(--mono); font-weight: 500; }
+.aud-ev .tag-s { font-size: 11px; padding: 0 5px; border: 1px solid currentColor; }
+.aud-verdict { margin: 10px 0 8px; padding: 8px 10px; font-weight: 600; font-size: 13.5px; background: #121212; border-left: 3px solid currentColor; }
+.aud-table { font-size: 12px; }
+.aud-table th, .aud-table td { padding: 4px 6px; text-align: right; }
+.aud-table td:first-child, .aud-table th:first-child { text-align: left; color: var(--text3); }
+.aud-progress { height: 4px; background: #222; margin: 10px 0 6px; }
+.aud-progress i { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+
 .warnbar { background: #1c1505; color: #ffd47a; font-size: 12.5px; padding: 6px 14px; border-bottom: 1px solid #4a3608; border-left: 3px solid var(--warn); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 /* ---------- 列印 / PDF ---------- */
