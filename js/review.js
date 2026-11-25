@@ -21,7 +21,8 @@
     const version = data.versions.find((v) => v.id === vid);
     const project = data.project;
     const user = RT.user();
-    const isAdmin = RT.isAdmin(), isGuest = RT.isGuest(), isStaff = RT.isStaff();
+    // canManage：管理者，或此專案的專案負責人（可核准版本、修改／刪除任何註記與回覆）
+    const canManage = !!data.canManage, isGuest = RT.isGuest(), isStaff = RT.isStaff();
     const canComment = !isGuest || RT.session.share.canComment;
     const peopleMap = {};
     data.people.forEach((p) => { peopleMap[p.username.toLowerCase()] = p; });
@@ -37,7 +38,7 @@
 
     /* ---------------- 版面 ---------------- */
     const statusSel = isGuest ? RT.statusPill(version.status)
-      : `<select id="verStatus" title="版本狀態">${RTCore.VERSION_STATUS.map((s) => `<option ${s === version.status ? 'selected' : ''} ${s === '已核准' && !isAdmin ? 'disabled' : ''}>${s}</option>`).join('')}</select>`;
+      : `<select id="verStatus" title="版本狀態">${RTCore.VERSION_STATUS.map((s) => `<option ${s === version.status ? 'selected' : ''} ${s === '已核准' && !canManage ? 'disabled' : ''}>${s}</option>`).join('')}</select>`;
     main.innerHTML = `<div class="review">
       <div class="rv-top">
         <a class="btn ghost sm" href="#/p/${esc(project.id)}">‹ 專案</a>
@@ -700,7 +701,7 @@
       const today = RT.todayStr();
       const done = RTCore.NOTE_DONE.includes(n.status);
       const assignee = n.assignee ? (peopleMap[String(n.assignee).toLowerCase()] || {}).displayName || n.assignee : '';
-      const canEdit = isAdmin || n.author === user.username;
+      const canEdit = canManage || n.author === user.username;
       let html = `<div class="note ${sel ? 'sel' : ''}" data-note="${esc(n.id)}">
         <div class="head"><span class="num">#${numberOf(n)}</span><span class="tcl">${esc(tcOf(n))}${n.outFrame > n.inFrame ? ' → ' + esc(tcOf(n, 'out')) : ''}</span>
           ${n.internal ? '<span class="internal-badge">內部</span>' : ''}${n.carriedFrom ? `<span class="carry-badge">沿用 ${esc(n.carriedFrom.split(':')[0])}</span>` : ''}
@@ -719,7 +720,7 @@
           ${n.attachIds.length ? `<div class="attach-list" style="margin-bottom:8px">${n.attachIds.map((id) => `<div class="a" data-zoom="${esc(id)}"><img data-file="${esc(id)}"></div>`).join('')}</div>` : ''}
           ${n.replies.map((r) => `<div class="reply">
             <div class="who">${esc(r.authorName)}・${esc(RT.fmtTime(r.createdAt))}${r.internal ? ' <span class="internal-badge">內部</span>' : ''}
-              ${(isAdmin || r.author === user.username) && (r.text || (r.attachIds && r.attachIds.length)) ? `<button class="btn sm ghost" data-delreply="${esc(r.id)}" style="height:18px;padding:0 4px;font-size:11px">刪除</button>` : ''}</div>
+              ${(canManage || r.author === user.username) && (r.text || (r.attachIds && r.attachIds.length)) ? `<button class="btn sm ghost" data-delreply="${esc(r.id)}" style="height:18px;padding:0 4px;font-size:11px">刪除</button>` : ''}</div>
             ${r.statusChange ? `<div class="sc">狀態 ${esc(r.statusChange)}</div>` : ''}
             ${r.text ? `<div class="txt">${fmtText(r.text)}</div>` : ''}
             ${r.attachIds && r.attachIds.length ? `<div class="attach-list">${r.attachIds.map((id) => `<div class="a" data-zoom="${esc(id)}"><img data-file="${esc(id)}"></div>`).join('')}</div>` : ''}

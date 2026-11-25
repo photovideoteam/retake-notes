@@ -122,7 +122,10 @@
     var adminToken = core.handle({ action: 'login', username: 'admin', pin: '1234' }).token;
     core.handle({ action: 'saveUser', token: adminToken, user: { username: 'studio_a', displayName: '動畫廠商 A', role: 'vendor', company: 'Studio A', pin: '5678', notify: true, email: 'vendor@example.com' } });
     core.handle({ action: 'saveUser', token: adminToken, user: { username: 'acer_amy', displayName: 'Amy（Acer）', role: 'acer', company: 'Acer', pin: '2468', notify: false, email: '' } });
-    core.handle({ action: 'saveProject', token: adminToken, project: { name: '範例專案：品牌形象短片', description: '試用模式的範例專案，可以自由修改或刪除。', members: ['studio_a', 'acer_amy'], status: '進行中', watermark: true } });
+    core.handle({ action: 'saveUser', token: adminToken, user: { username: 'pm_lin', displayName: '林經理', role: 'lead', company: 'Acer', pin: '1357', notify: false, email: '' } });
+    core.handle({ action: 'saveUser', token: adminToken, user: { username: 'pm_chen', displayName: '陳經理', role: 'lead', company: 'Acer', pin: '9753', notify: false, email: '' } });
+    core.handle({ action: 'saveProject', token: adminToken, project: { name: '範例專案：品牌形象短片', description: '試用模式的範例專案，可以自由修改或刪除。負責人：林經理。', members: ['pm_lin', 'studio_a', 'acer_amy'], status: '進行中', watermark: true } });
+    core.handle({ action: 'saveProject', token: adminToken, project: { name: '範例專案：產品開箱影片', description: '負責人：陳經理。林經理看不到這個專案。', members: ['pm_chen'], status: '進行中' } });
     core.handle({ action: 'logout', token: adminToken });
     // 試用模式的範例帳號不強制改 PIN（方便直接試用）；在「帳號管理」新增的帳號仍會要求改 PIN
     env.db.all('Users').forEach(function (u) { env.db.update('Users', u.id, { mustChangePin: '' }); });
