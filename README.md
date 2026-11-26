@@ -97,7 +97,7 @@ API_URL: 'https://script.google.com/macros/s/xxxxxxxx/exec',
 
 - 改了 `Code.gs` 或 `core.js`：Apps Script 的 `Core.gs` 也要更新成新的 `core.js`，然後「管理部署作業」→ 編輯 →「新版本」（網址不會變）。資料欄位有增加時（例如 v1.2.0 的 `mustChangePin`、v1.3.0 的 `createdBy`），更新程式後再執行一次 `setup`，它只會補上缺少的欄位，不會動到既有資料。
 - 忘記管理者 PIN：Apps Script 編輯器選 `resetAdminPin` →「執行」，新 PIN 會顯示在下方「執行記錄」；用它登入後網站會要求你改成自己的 PIN。
-- 改了網站檔案：重新上傳到 GitHub，並把 `index.html` 裡所有 `?v=20261126-2` 換成新的版本字串，避免瀏覽器快取到舊檔。
+- 改了網站檔案：重新上傳到 GitHub，並把 `index.html` 裡所有 `?v=20261126-3` 換成新的版本字串，避免瀏覽器快取到舊檔。
 - 發佈新功能時，把 `js/app.js` 最上面的 `RT.VERSION` 改成新版本號，標題列會自動顯示。
 
 ## 版本紀錄
