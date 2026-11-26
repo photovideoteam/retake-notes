@@ -77,7 +77,8 @@
         Object.keys(patch).forEach(function (k) { row[k] = patch[k]; });
         save();
       },
-      remove: function (t, id) { data[t] = data[t].filter(function (r) { return r.id !== id; }); save(); }
+      remove: function (t, id) { data[t] = data[t].filter(function (r) { return r.id !== id; }); save(); },
+      removeMany: function (t, ids) { var s = {}; ids.forEach(function (x) { s[x] = 1; }); data[t] = data[t].filter(function (r) { return !s[r.id]; }); save(); }
     };
   }
 
@@ -108,7 +109,8 @@
           var v = localStorage.getItem('rt_file_' + ref);
           if (v === null) throw new Error('missing');
           return v;
-        }
+        },
+        remove: function (ref) { localStorage.removeItem('rt_file_' + ref); }
       },
       mail: function (to, subject, body) { console.info('[試用模式 Email] →', to, '\n', subject, '\n', body); },
       siteUrl: location.href.replace(/#.*$/, '')

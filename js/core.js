@@ -38,7 +38,7 @@ var RTCore = (function () {
   var MAX_CELL = 45000;
 
   var WRITE_ACTIONS = {
-    login: 1, shareLogin: 1, logout: 1, changePin: 1, saveUser: 1, saveProject: 1, saveVersion: 1, deleteVersion: 1,
+    login: 1, shareLogin: 1, logout: 1, changePin: 1, saveUser: 1, saveProject: 1, deleteProject: 1, saveVersion: 1, deleteVersion: 1,
     saveNote: 1, deleteNote: 1, addReply: 1, deleteReply: 1, uploadFile: 1, saveShare: 1, revokeShare: 1
   };
 
@@ -571,6 +571,35 @@ var RTCore = (function () {
         p = insert('Projects', patch);
       }
       return { project: projectOut(p) };
+    };
+
+    /* 刪除整個專案（只有管理者）：版本、註記、回覆、附件、分享連結一起刪除。需輸入專案名稱確認 */
+    A.deleteProject = function (req, ctx) {
+      if (ctx.role !== 'admin') throw err('只有管理者可以刪除專案', 'PERM');
+      var p = get('Projects', str(req.id));
+      if (!p) throw err('找不到專案');
+      if (str(req.confirmName).trim() !== str(p.name).trim()) throw err('輸入的專案名稱不符，沒有刪除');
+      function ids(table) { return db.all(table).filter(function (r) { return r.projectId === p.id; }); }
+      function removeAll(table, rows) {
+        var list = rows.map(function (r) { return r.id; });
+        if (!list.length) return 0;
+        if (db.removeMany) db.removeMany(table, list); // 一次重寫整張表，比逐列刪快很多
+        else list.forEach(function (x) { db.remove(table, x); });
+        return list.length;
+      }
+      var files = ids('Files');
+      files.forEach(function (f) {
+        if (env.files && env.files.remove && f.ref) { try { env.files.remove(f.ref); } catch (e) { /* 檔案已不存在 */ } }
+      });
+      var out = {
+        replies: removeAll('Replies', ids('Replies')),
+        notes: removeAll('Notes', ids('Notes')),
+        versions: removeAll('Versions', ids('Versions')),
+        shares: removeAll('Shares', ids('Shares')),
+        files: removeAll('Files', files)
+      };
+      db.remove('Projects', p.id);
+      return { deleted: out };
     };
 
     function touchProject(pid) { if (get('Projects', pid)) update('Projects', pid, { updatedAt: now() }); }

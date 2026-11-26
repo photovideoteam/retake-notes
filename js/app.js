@@ -7,7 +7,7 @@
 
   /* ================= 版本 ================= */
   // 每次發佈新功能時更新這裡（同時記得更新 index.html 的 ?v=）
-  RT.VERSION = '1.4.0';
+  RT.VERSION = '1.4.1';
 
   /* 標題列品牌：Acer logo ｜ 系統名稱 ＋ 版本 */
   RT.brandHTML = function (href) {
@@ -427,6 +427,11 @@
           <div class="row wrap" style="gap:6px 16px">${others.length ? others.map(box).join('') : '<span class="dim">尚未建立 Acer 同事或廠商帳號，請到「帳號管理」新增。</span>'}</div></div>
         <label class="chk"><input type="checkbox" name="watermark" ${p && p.watermark ? 'checked' : ''}> 廠商與訪客觀看時顯示浮水印（姓名＋日期）</label>`,
       okText: p ? '儲存' : '建立',
+      extraFoot: p && RT.isAdmin() ? '<button class="btn danger" type="button" data-delproj>刪除專案</button>' : '',
+      onOpen: (m, close) => {
+        const b = $('[data-delproj]', m);
+        if (b) b.onclick = () => { close(); deleteProjectModal(p); };
+      },
       onOk: async (m) => {
         const res = await RT.call('saveProject', {
           project: {
@@ -437,6 +442,33 @@
         });
         RT.toast(p ? '專案已儲存' : '專案已建立', 'ok');
         if (p) route(); else location.hash = '#/p/' + res.project.id;
+      }
+    });
+  }
+
+  /* 刪除整個專案（只有管理者）：要輸入專案名稱才能刪 */
+  function deleteProjectModal(p) {
+    const cur = RT.currentProject && RT.currentProject.project.id === p.id ? RT.currentProject : null;
+    const nv = cur ? cur.versions.length : null, nn = cur ? cur.stats.total : null;
+    const what = nv === null ? '所有版本、註記' : `${nv} 個版本、${nn} 則註記`;
+    RT.modal({
+      title: '刪除專案',
+      body: `<p style="margin:0 0 10px;line-height:1.6">將永久刪除專案「<b>${esc(p.name)}</b>」，連同其中${what}、回覆、附件截圖與分享連結。</p>
+        <p class="lv-err" style="margin:0 0 14px;font-size:13px">刪除後無法從網站復原。附件截圖會移到 Google 雲端硬碟的垃圾桶（30 天內可救回），其他資料直接刪除。需要留存的話，請先在專案頁匯出 Excel／PDF。</p>
+        <label class="field"><span>請輸入專案名稱確認</span><input type="text" name="confirm" autocomplete="off" placeholder="${esc(p.name)}"></label>`,
+      okText: '永久刪除', noEnter: true,
+      onOpen: (m) => {
+        const ok = $('[data-ok]', m), inp = $('[name=confirm]', m);
+        ok.style.background = 'var(--bad)';
+        ok.disabled = true;
+        inp.oninput = () => { ok.disabled = inp.value.trim() !== p.name.trim(); };
+      },
+      onOk: async (m) => {
+        const res = await RT.call('deleteProject', { id: p.id, confirmName: $('[name=confirm]', m).value });
+        const d = res.deleted || {};
+        RT.toast(`已刪除專案「${p.name}」（${d.versions || 0} 個版本、${d.notes || 0} 則註記）`, 'ok');
+        RT.currentProject = null;
+        if (location.hash === '#/projects') route(); else location.hash = '#/projects';
       }
     });
   }
