@@ -8,7 +8,9 @@ window.RT_CONFIG = {
 
   // 選填：Google API 金鑰。有填的話，Google Drive 分享連結會改用 Drive API 串流，
   // 支援大檔案與逐格跳轉；沒填則使用一般下載連結（大於約 100MB 的檔案可能無法播放）。
-  GOOGLE_API_KEY: '',
+  // 這把金鑰只能從 https://photovideoteam.github.io/* 使用、只能呼叫 Drive API
+  // （Google Cloud 專案 retake-notes，帳號 acervideoteam）
+  GOOGLE_API_KEY: 'AIzaSyBPVUTJ5AF-sp_NuCpYVO89syMV3jyLMtk',
 
   // 預設 fps（偵測不到時使用）
   DEFAULT_FPS: 24,
