@@ -95,7 +95,7 @@ API_URL: 'https://script.google.com/macros/s/xxxxxxxx/exec',
 
 - 改了 `Code.gs` 或 `core.js`：Apps Script 的 `Core.gs` 也要更新成新的 `core.js`，然後「管理部署作業」→ 編輯 →「新版本」（網址不會變）。資料欄位有增加時（例如 v1.2.0 的 `mustChangePin`、v1.3.0 的 `createdBy`），更新程式後再執行一次 `setup`，它只會補上缺少的欄位，不會動到既有資料。
 - 忘記管理者 PIN：Apps Script 編輯器選 `resetAdminPin` →「執行」，新 PIN 會顯示在下方「執行記錄」；用它登入後網站會要求你改成自己的 PIN。
-- 改了網站檔案：重新上傳到 GitHub，並把 `index.html` 裡所有 `?v=20261125-3` 換成新的版本字串，避免瀏覽器快取到舊檔。
+- 改了網站檔案：重新上傳到 GitHub，並把 `index.html` 裡所有 `?v=20261126-1` 換成新的版本字串，避免瀏覽器快取到舊檔。
 - 發佈新功能時，把 `js/app.js` 最上面的 `RT.VERSION` 改成新版本號，標題列會自動顯示。
 
 ## 版本紀錄
@@ -113,7 +113,7 @@ API_URL: 'https://script.google.com/macros/s/xxxxxxxx/exec',
 | 方式 | 說明 |
 |---|---|
 | **本機檔案** | 檔案不會上傳，逐格最精準、免費。每個人要在自己電腦上有**同一個輸出檔**；系統會比對檔名與大小，不一致時會提醒。 |
-| **Google Drive** | 檔案共用設為「知道連結的人都能檢視」，貼上分享連結即可。沒有 API 金鑰時，大於約 100MB 的檔案可能無法播放；建議在 `config.js` 填 `GOOGLE_API_KEY`（Google Cloud Console 建立一把「API 金鑰」，啟用 Google Drive API），就能串流大檔並逐格跳轉。 |
+| **Google Drive** | 檔案共用設為「知道連結的人都能檢視」，貼上分享連結即可。Google 會擋其他網站直接播放雲端硬碟的下載連結，所以 `config.js` 必須填 `GOOGLE_API_KEY`（已設定：Google Cloud 專案 retake-notes，帳號 acervideoteam；金鑰限制只能從 `https://photovideoteam.github.io/*` 使用、只能呼叫 Drive API）。網站網址若改變，要到 Google Cloud 控制台 →「API 和服務」→「憑證」把新網址加進金鑰的網站限制。 |
 | **Dropbox** | 貼上分享連結，系統會自動轉成直接播放的網址。 |
 | **其他網址** | 任何可以直接播放的 `https://…mp4`。伺服器若不允許跨網域讀取，仍可播放與註記，但無法自動截圖。 |
 
