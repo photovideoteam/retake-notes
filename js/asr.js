@@ -321,6 +321,7 @@
             var text = String(c.text || '').trim();
             if (!text || b <= a) return;
             if (SPAM.test(text) && text.length < 40) return;
+            if (/^[(\[（【♪♫*].*[)\]）】♪♫*]$/.test(text) || /^[♪♫\s.。…]+$/.test(text)) return; // (音樂)、[Music]、♪ 之類的聲音標記
             if (meanRms(rms, a, b) < 0.003) return; // 幾乎無聲 → 幻覺
             var prev = segs[segs.length - 1], prev2 = segs[segs.length - 2];
             if (prev && prev2 && prev.text === text && prev2.text === text) return; // 重複鬼打牆
