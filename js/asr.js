@@ -25,7 +25,7 @@
       cpu: null
     }
   };
-  var LANGS = [['chinese', '中文'], ['english', '英文'], ['japanese', '日文'], ['', '自動偵測（中英夾雜時用，較不穩定）']];
+  var LANGS = [['english', '英文'], ['chinese', '中文'], ['japanese', '日文'], ['', '自動偵測（中英夾雜時用，較不穩定）']];
 
   var hw = null;
   async function detect() {

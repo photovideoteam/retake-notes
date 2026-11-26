@@ -1274,7 +1274,7 @@
       try { last = JSON.parse(localStorage.getItem('rt_asr_opt') || '{}'); } catch (e) { last = {}; }
       let model = last.model || (h.gpu ? 'best' : 'std');
       if (!RT.asr.variant(model)) model = 'std';
-      const lang = last.language !== undefined ? last.language : 'chinese';
+      const lang = last.language !== undefined ? last.language : 'english'; // 大部分影片是英文旁白
       const modes = Object.keys(RT.asr.MODELS).map((k) => {
         const m = RT.asr.MODELS[k], v = RT.asr.variant(k);
         return `<label class="asr-mode ${v ? '' : 'off'}"><input type="radio" name="model" value="${k}" ${k === model ? 'checked' : ''} ${v ? '' : 'disabled'}>
