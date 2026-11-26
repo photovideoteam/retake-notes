@@ -7,7 +7,7 @@
 
   /* ================= 版本 ================= */
   // 每次發佈新功能時更新這裡（同時記得更新 index.html 的 ?v=）
-  RT.VERSION = '1.3.0';
+  RT.VERSION = '1.4.0';
 
   /* 標題列品牌：Acer logo ｜ 系統名稱 ＋ 版本 */
   RT.brandHTML = function (href) {

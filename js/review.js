@@ -34,7 +34,8 @@
       sort: 'tc', replyDraft: {}, replyAttach: {}, compare: null, timers: [], loopOn: false, lastSig: '', src: null
     };
     // 字幕狀態
-    const SUB = { cues: [], errors: [], name: '', text: '', show: true, offset: false, onlyIssues: false, curKey: '' };
+    const SUB = { cues: [], errors: [], name: '', text: '', show: true, offset: false, onlyIssues: false, curKey: '', edit: null };
+    let pageAlive = true;
 
     /* ---------------- 版面 ---------------- */
     const statusSel = isGuest ? RT.statusPill(version.status)
@@ -140,17 +141,21 @@
           <div class="side-pane hidden" data-pane="subs">
             <div class="tool-head">
               <div class="row"><button class="btn sm primary" id="srtPick">載入字幕檔</button><input type="file" id="srtFile" accept=".srt,.vtt,text/plain" hidden>
-                <span class="grow dim ellipsis" id="srtName">尚未載入（SRT / VTT，只在你的電腦上讀取，不會上傳）</span>
+                <button class="btn sm" id="asrBtn" title="用語音辨識自動產生字幕（在這台電腦上處理，不會上傳）">自動產生字幕</button>
+                <span class="grow dim ellipsis" id="srtName" title="SRT / VTT 只在你的電腦上讀取，不會上傳">尚未載入</span>
                 <button class="btn sm ghost hidden" id="srtClear" title="移除字幕">✕</button></div>
+              <div id="asrBox" class="asr-box hidden"></div>
               <div class="row wrap" style="gap:4px 14px">
                 <label class="chk"><input type="checkbox" id="srtShow" checked> 疊在畫面上</label>
                 <label class="chk hidden" id="srtOffsetWrap" title="字幕檔的時間是以影片起始 TC 算起（例如 01:00:00,000 對應影片第一格）"><input type="checkbox" id="srtOffset"> 時間從起始 TC 算起</label>
                 <label class="chk"><input type="checkbox" id="srtOnlyIssues"> 只看有問題的</label>
                 <span class="sp"></span><button class="btn sm ghost" id="srtRules">檢查規則</button>
               </div>
+              <div class="row" style="gap:6px"><button class="btn sm" id="srtAdd" title="在目前畫面的位置新增一句字幕">＋ 新增一句</button>
+                <span class="sp"></span><button class="btn sm" id="srtExport" disabled title="把目前的字幕（含修改）存成 SRT 檔">匯出 SRT</button></div>
               <div id="srtSummary" class="tool-summary"></div>
             </div>
-            <div class="tool-list" id="srtList"><div class="empty">載入字幕檔後，會逐句列出時間碼並自動檢查：<br>重疊、間隔太短、顯示太短 / 太長、閱讀速度、每行字數、行數、超出影片長度。<br>點一句可跳到該格；「＋註記」可把那句字幕直接加為註記。</div></div>
+            <div class="tool-list" id="srtList"><div class="empty">載入字幕檔，或按「自動產生字幕」用語音辨識產生（一定要校對）。<br>會逐句列出時間碼並自動檢查：重疊、間隔太短、顯示太短 / 太長、閱讀速度、每行字數、行數、超出影片長度。<br>點一句可跳到該格；✎ 可修改文字與入出點；「＋註記」可把那句字幕直接加為註記；改完按「匯出 SRT」。</div></div>
           </div>
           <div class="side-pane hidden" data-pane="audio">
             <div class="tool-head">
@@ -1048,7 +1053,8 @@
     function applySubText(text, name, fresh) {
       const res = RT.parseSubtitles(text);
       if (!res.cues.length) { RT.toast('讀不到任何字幕：請確認是 SRT 或 VTT 格式', 'bad'); return; }
-      SUB.text = text; SUB.name = name; SUB.cues = res.cues; SUB.errors = res.errors;
+      SUB.text = text; SUB.name = name; SUB.cues = res.cues; SUB.errors = res.errors; SUB.edit = null;
+      $('#srtExport').disabled = false;
       // 字幕時間是否以起始 TC 算起（例如 01:00:00,000）：自動判斷
       const startSec = player.startFrames / player.exactFps;
       $('#srtOffsetWrap').classList.toggle('hidden', !player.startFrames);
@@ -1068,10 +1074,11 @@
       updateSubs(true);
     }
     function clearSubs() {
-      SUB.cues = []; SUB.errors = []; SUB.name = ''; SUB.text = '';
+      SUB.cues = []; SUB.errors = []; SUB.name = ''; SUB.text = ''; SUB.edit = null;
       delete RT.pendingSubs[vid];
       RT.fileStore.del('subs:' + vid);
-      $('#srtName').textContent = '尚未載入（SRT / VTT，只在你的電腦上讀取，不會上傳）';
+      $('#srtExport').disabled = true;
+      $('#srtName').textContent = '尚未載入';
       $('#srtClear').classList.add('hidden');
       $('#srtSummary').innerHTML = '';
       $('#tabCntSubs').textContent = '';
@@ -1093,9 +1100,9 @@
         ${!issues ? '<span class="lv-ok">✓ 沒有發現問題</span>' : ''}
         ${SUB.errors.length ? `<div class="lv-err" style="width:100%">格式問題：${esc(SUB.errors.slice(0, 3).join('；'))}${SUB.errors.length > 3 ? '…' : ''}</div>` : ''}`;
       const list = SUB.onlyIssues ? cues.filter((c) => c.level === 'err' || c.level === 'warn') : cues;
-      $('#srtList').innerHTML = list.length ? list.map((c) => `<div class="cue ${c.level ? 'lv-' + c.level : ''}" data-cue="${c.n - 1}">
+      $('#srtList').innerHTML = list.length ? list.map((c) => SUB.edit && SUB.edit.i === c.n - 1 ? cueEditorHTML(c) : `<div class="cue ${c.level ? 'lv-' + c.level : ''}" data-cue="${c.n - 1}">
           <div class="cue-h"><span class="cue-n">#${c.n}</span><span class="mono cue-tc">${player.tc(c.inF)} → ${player.tc(c.outF)}</span>
-            <span class="sp"></span>${canComment ? `<button class="btn sm ghost" data-cue-note="${c.n - 1}" title="把這句字幕加為註記（自動帶入入出點）">＋註記</button>` : ''}</div>
+            <span class="sp"></span><button class="btn sm ghost" data-cue-edit="${c.n - 1}" title="修改這句（文字、入出點）">✎</button>${canComment ? `<button class="btn sm ghost" data-cue-note="${c.n - 1}" title="把這句字幕加為註記（自動帶入入出點）">＋註記</button>` : ''}</div>
           <div class="cue-t">${cueText(c) || '<span class="dim">（空白）</span>'}</div>
           <div class="dim cue-m" title="顯示時間 / 字數 / 每秒字數">${c.dur.toFixed(2)} 秒・${c.chars} 字・每秒 ${c.cps.toFixed(1)} 字</div>
           ${c.warn.length ? `<div class="cue-w">${c.warn.map((w) => `<span class="lv-${w[0]}">${esc(w[1])}</span>`).join('')}</div>` : ''}
@@ -1131,10 +1138,20 @@
     $('#srtOffset').onchange = (e) => { SUB.offset = e.target.checked; recheckSubs(); };
     $('#srtOnlyIssues').onchange = (e) => { SUB.onlyIssues = e.target.checked; renderSubList(); };
     $('#srtList').addEventListener('click', (e) => {
+      const ed = e.target.closest('[data-ed]');
+      if (ed) { cueEditAction(ed.dataset.ed); return; }
+      if (e.target.closest('.cue.editing')) return;
+      const eb = e.target.closest('[data-cue-edit]');
+      if (eb) { startCueEdit(Number(eb.dataset.cueEdit)); return; }
       const nb = e.target.closest('[data-cue-note]');
       if (nb) { cueToNote(SUB.cues[Number(nb.dataset.cueNote)]); return; }
       const row = e.target.closest('[data-cue]');
       if (row && player.loaded()) { player.pause(); player.seekFrame(SUB.cues[Number(row.dataset.cue)].inF); }
+    });
+    $('#srtList').addEventListener('keydown', (e) => {
+      if (e.target.id !== 'edText') return;
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); cueEditAction('save'); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cueEditAction('cancel'); }
     });
     function cueToNote(c) {
       if (!player.loaded()) { RT.toast('請先載入影片'); return; }
@@ -1148,6 +1165,190 @@
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
     }
+    /* ---- 逐句修改 ---- */
+    const subOff = () => (SUB.offset ? player.startFrames : 0);
+    const frameToSec = (f) => (f + subOff()) / player.exactFps;
+    function edTc(sec, isOut) {
+      if (!player.loaded()) return RT.srtTime(sec);
+      return player.tc(Math.max(0, Math.round(sec * player.exactFps) - subOff() - (isOut ? 1 : 0)));
+    }
+    function cueEditorHTML(c) {
+      const E = SUB.edit;
+      return `<div class="cue editing" data-cue="${c.n - 1}">
+        <div class="cue-h"><span class="cue-n">#${c.n}</span><span class="mono cue-tc" id="edTc">${edTc(E.start)} → ${edTc(E.end, true)}</span></div>
+        <textarea class="cue-ta" id="edText" rows="2" placeholder="字幕文字（Enter 換行）">${escText(E.text)}</textarea>
+        <div class="row wrap cue-ed-btns">
+          <button class="btn sm" data-ed="in" title="開始時間設為目前畫面">入點＝目前畫面</button>
+          <button class="btn sm" data-ed="out" title="結束時間設為目前畫面（含這一格）">出點＝目前畫面</button>
+          <span class="sp"></span>
+          <button class="btn sm ghost" data-ed="del" title="刪除這句">刪除</button>
+          <button class="btn sm" data-ed="cancel">取消</button>
+          <button class="btn sm primary" data-ed="save">儲存</button>
+        </div></div>`;
+    }
+    function startCueEdit(i) {
+      const c = SUB.cues[i];
+      if (!c) return;
+      SUB.edit = { i, start: c.start, end: c.end, text: c.text, orig: c.text };
+      if (player.loaded()) { player.pause(); player.seekFrame(Math.max(0, c.inF)); }
+      renderSubList();
+      const ta = $('#edText');
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }
+    async function cueEditAction(act) {
+      const E = SUB.edit;
+      if (!E) return;
+      const ta = $('#edText');
+      if (ta) E.text = ta.value;
+      if (act === 'in' || act === 'out') {
+        if (!player.loaded()) { RT.toast('請先載入影片'); return; }
+        if (act === 'in') E.start = frameToSec(player.frame); else E.end = frameToSec(player.frame + 1);
+        $('#edTc').textContent = `${edTc(E.start)} → ${edTc(E.end, true)}`;
+        return;
+      }
+      if (act === 'cancel') { SUB.edit = null; renderSubList(); return; }
+      if (act === 'del') {
+        if (!(await RT.confirm(`刪除第 ${E.i + 1} 句字幕？`, '刪除', true))) return;
+        SUB.cues.splice(E.i, 1);
+        SUB.edit = null;
+        commitSubs();
+        return;
+      }
+      if (act === 'save') {
+        if (E.end <= E.start) { RT.toast('結束時間必須晚於開始時間', 'bad'); return; }
+        const c = SUB.cues[E.i];
+        const text = E.text.replace(/\r/g, '').replace(/\n{2,}/g, '\n').trim();
+        if (text !== E.orig) { c.text = text; c.raw = text; }
+        c.start = E.start; c.end = E.end;
+        SUB.edit = null;
+        commitSubs();
+      }
+    }
+    /* 修改後：重新排序編號、存在這台電腦、重新檢查 */
+    function commitSubs() {
+      if (!SUB.cues.length) { clearSubs(); return; }
+      SUB.cues.sort((a, b) => a.start - b.start);
+      SUB.cues.forEach((c, i) => { c.n = i + 1; });
+      SUB.text = RT.buildSrt(SUB.cues);
+      if (!SUB.name) SUB.name = `${project.name}_${version.label}.srt`;
+      const store = { name: SUB.name, text: SUB.text };
+      RT.pendingSubs[vid] = store;
+      RT.fileStore.set('subs:' + vid, store);
+      $('#srtName').textContent = SUB.name; $('#srtName').title = SUB.name;
+      $('#srtClear').classList.remove('hidden');
+      $('#srtExport').disabled = false;
+      recheckSubs();
+      setSubShow(SUB.show);
+    }
+    $('#srtAdd').onclick = () => {
+      if (!player.loaded()) { RT.toast('請先載入影片'); return; }
+      const start = frameToSec(player.frame);
+      const next = SUB.cues.find((c) => c.start > start + 0.01);
+      const end = Math.min(start + 2, next ? next.start : Infinity, frameToSec(player.total));
+      if (end - start < 0.1) { RT.toast('這個位置緊接著下一句，請先移到空白處', 'bad'); return; }
+      const c = { n: 0, id: '', start, end, raw: '', text: '' };
+      SUB.cues.push(c);
+      commitSubs();
+      showTab('subs');
+      startCueEdit(SUB.cues.indexOf(c));
+    };
+    $('#srtExport').onclick = () => {
+      if (!SUB.cues.length) return;
+      if (SUB.edit) { RT.toast('還有一句正在修改，請先儲存或取消', 'bad'); return; }
+      const srt = '﻿' + RT.buildSrt(SUB.cues); // 加 BOM：Windows 上的剪輯軟體才不會把中文讀成亂碼
+      const base = (SUB.name || `${project.name}_${version.label}`).replace(/\.(srt|vtt|txt)$/i, '');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([srt], { type: 'application/x-subrip;charset=utf-8' }));
+      a.download = base.replace(/[\\/:*?"<>|]/g, '_') + '.srt';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      RT.toast('已匯出 SRT', 'ok');
+    };
+
+    /* ---- 自動產生字幕（語音辨識） ---- */
+    $('#asrBtn').onclick = async () => {
+      if (!S.src) { RT.toast('請先載入影片'); return; }
+      if (RT.asr.running) { RT.toast('已經在辨識中，請等它完成'); return; }
+      const h = await RT.asr.detect();
+      let last = {};
+      try { last = JSON.parse(localStorage.getItem('rt_asr_opt') || '{}'); } catch (e) { last = {}; }
+      let model = last.model || (h.gpu ? 'best' : 'std');
+      if (!RT.asr.variant(model)) model = 'std';
+      const lang = last.language !== undefined ? last.language : 'chinese';
+      const modes = Object.keys(RT.asr.MODELS).map((k) => {
+        const m = RT.asr.MODELS[k], v = RT.asr.variant(k);
+        return `<label class="asr-mode ${v ? '' : 'off'}"><input type="radio" name="model" value="${k}" ${k === model ? 'checked' : ''} ${v ? '' : 'disabled'}>
+          <span><b>${esc(m.label)}</b><small>${esc(m.desc)}${v ? `・第一次使用需下載約 ${v.v.mb} MB` : '・這台電腦不支援'}</small></span></label>`;
+      }).join('');
+      RT.modal({
+        title: '自動產生字幕',
+        body: `<p class="dim" style="margin:0 0 12px;font-size:12.5px;line-height:1.6">用語音辨識（Whisper）把旁白、對白轉成字幕。聲音只在這台電腦上處理，不會上傳。<br>辨識結果一定要校對：專有名詞、產品名稱常會聽錯，純音樂的段落偶爾會出現不存在的字。</p>
+          <div class="field"><span>模式</span>${modes}</div>
+          <label class="field"><span>語言</span><select name="lang">${RT.asr.LANGS.map((l) => `<option value="${l[0]}" ${l[0] === lang ? 'selected' : ''}>${esc(l[1])}</option>`).join('')}</select>
+            <span class="hint">整支影片只有一種語言時，直接選語言最準；選錯語言會被翻譯成那種語言。</span></label>
+          <details class="asr-fix"><summary>詞彙修正（專有名詞）</summary>
+            <textarea name="fixes" rows="5">${escText(RT.asr.fixesText())}</textarea>
+            <div class="row" style="margin-top:4px"><span class="hint grow">每行一組「聽錯的字=正確的字」，辨識完自動取代。設定只存在這台電腦。</span><button class="btn sm ghost" type="button" data-fixdef>恢復預設</button></div></details>
+          ${h.gpu ? '' : '<p class="lv-warn" style="font-size:12.5px">這個瀏覽器沒有 WebGPU，會用 CPU 辨識，速度會慢很多。建議使用最新版 Chrome 或 Edge。</p>'}
+          ${SUB.cues.length ? '<p class="lv-warn" style="font-size:12.5px">完成後會取代目前的字幕。需要保留的話，請先按「匯出 SRT」。</p>' : ''}`,
+        okText: '開始辨識', noFocus: true,
+        onOpen: (m) => { $('[data-fixdef]', m).onclick = () => { $('[name=fixes]', m).value = RT.asr.FIX_DEFAULT; }; },
+        onOk: (m) => {
+          const sel = $('[name=model]:checked', m);
+          const opt = { model: sel ? sel.value : model, language: $('[name=lang]', m).value };
+          localStorage.setItem('rt_asr_opt', JSON.stringify(opt));
+          const fx = $('[name=fixes]', m).value;
+          RT.asr.setFixes(fx.trim() === RT.asr.FIX_DEFAULT ? null : fx);
+          runAsr(opt);
+        }
+      });
+    };
+    function fmtDur(s) { s = Math.max(0, Math.round(s)); return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`; }
+    async function runAsr(opt) {
+      const box = $('#asrBox');
+      box.classList.remove('hidden');
+      $('#asrBtn').disabled = true;
+      box.innerHTML = `<div class="row"><span class="grow" id="asrStage">準備中…</span><button class="btn sm ghost" id="asrCancel">取消</button></div>
+        <div class="aud-progress"><i style="width:0"></i></div><div class="dim ellipsis asr-last" id="asrLast"></div>`;
+      $('#asrCancel').onclick = () => RT.asr.cancel();
+      const set = (txt, p, lastTxt) => {
+        if (!pageAlive) return;
+        $('#asrStage').textContent = txt;
+        if (p !== null) $('#asrBox .aud-progress i').style.width = Math.round(p * 100) + '%';
+        if (lastTxt !== undefined) $('#asrLast').textContent = lastTxt;
+      };
+      const mb = (b) => (b / 1048576).toFixed(0);
+      const label = RT.asr.MODELS[opt.model].label;
+      try {
+        const res = await RT.asr.transcribe(S.src, opt, (st, p, info) => {
+          if (st === 'decode') set('讀取影片的聲音…（檔案越大越久）', 0);
+          else if (st === 'model') {
+            if (info && info.total && p < 1) set(`載入模型 ${mb(info.loaded)} / ${mb(info.total)} MB（第一次使用需要下載，之後會快很多）`, p);
+            else set('準備模型中…', p || 0);
+          } else if (st === 'asr') {
+            const segs = (info && info.segs) || [];
+            set(`辨識中（${label}）${Math.round(p * 100)}%${info && info.eta ? `・約剩 ${fmtDur(info.eta)}` : ''}`, p, segs.length ? `${segs.length} 段：${segs[segs.length - 1].text}` : '');
+          } else if (st === 'finish') set('整理字幕…', 1);
+        });
+        if (!res.cues.length) { if (pageAlive) RT.toast('沒有辨識到任何語音', 'bad'); return; }
+        const name = `${project.name}_${version.label}_自動字幕.srt`;
+        const store = { name, text: res.srt };
+        RT.pendingSubs[vid] = store;
+        RT.fileStore.set('subs:' + vid, store); // 只存在這台電腦
+        if (!pageAlive) { RT.toast(`「${version.label}」的自動字幕已完成，回到該版本即可查看`, 'ok'); return; }
+        applySubText(res.srt, name, false);
+        showTab('subs');
+        RT.toast(`已產生 ${res.cues.length} 句字幕（${res.device === 'webgpu' ? '顯示卡加速' : 'CPU'}），請校對後再匯出 SRT`, 'ok');
+      } catch (e) {
+        if (e.cancelled) { if (pageAlive) RT.toast('已取消自動字幕'); }
+        else if (pageAlive) RT.toast('自動字幕失敗：' + e.message, 'bad');
+        else console.error(e);
+      } finally {
+        if (pageAlive) { box.classList.add('hidden'); box.innerHTML = ''; $('#asrBtn').disabled = false; }
+      }
+    }
+    if (RT.asr && RT.asr.running) { $('#asrBtn').disabled = true; $('#asrBtn').title = '另一個版本正在辨識中'; }
+
     $('#srtRules').onclick = () => {
       const r = RT.subRules();
       const fields = [['cjkCps', '中文：每秒最多幾個字'], ['cjkLine', '中文：每行最多幾個字'], ['latinCps', '英文：每秒最多幾個字元'], ['latinLine', '英文：每行最多幾個字元'],
@@ -1367,6 +1568,7 @@
 
     /* ---------------- 清理 ---------------- */
     RT.cleanup = () => {
+      pageAlive = false;
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('fullscreenchange', onFs);
       ro.disconnect();
